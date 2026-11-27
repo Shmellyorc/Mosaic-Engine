@@ -1,0 +1,14 @@
+{
+  "name": "@mosaic/render",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mosaic/model": "0.1.0",
+    "@mosaic/runtime": "0.1.0",
+    "pixi": {
+      "js": "^8.23.0"
+    }
+  }
+}

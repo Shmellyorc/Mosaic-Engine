@@ -1,0 +1,11 @@
+{
+  "name": "@mosaic/example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mosaic/blueprints": "0.1.0",
+    "@mosaic/model": "0.1.0"
+  }
+}

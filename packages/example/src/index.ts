@@ -1,0 +1,176 @@
+import { literal, type Block, type Expression } from "@mosaic/blueprints";
+import { createEntity, type Entity, type Project } from "@mosaic/model";
+import landscape from "../assets/ridge.png?inline";
+import sheet from "../assets/lantern.png?inline";
+
+export function exampleProject(): Project {
+  const tileSize = 20;
+  const back = "environment";
+  const actors = "characters";
+  const hud = "overlay";
+  const object = (
+    id: string,
+    name: string,
+    layer: string,
+    values: Partial<Entity["transform"]>,
+  ): Entity => {
+    const entity = createEntity(layer, name);
+    return { ...entity, id, transform: { ...entity.transform, ...values } };
+  };
+  const world = {
+    ...object("ridge", "Ridge Panorama", back, {
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 400,
+    }),
+    visual: { kind: "sprite" as const, assetId: "ridge-art" },
+  };
+  const player = object("player", "Lantern Keeper", actors, {
+    x: 385,
+    y: 271,
+    width: 48,
+    height: 48,
+  });
+  const frame = (index: number) => ({ x: index * 24, y: 0, w: 24, h: 24 });
+  player.visual = { kind: "sprite", assetId: "keeper-art", frame: frame(0) };
+  player.blueprintId = "movement";
+  player.clips = [
+    {
+      id: "idle",
+      name: "Idle",
+      fps: 2,
+      loop: true,
+      frames: [frame(0), frame(1)],
+    },
+    {
+      id: "walk",
+      name: "Walk",
+      fps: 8,
+      loop: true,
+      frames: [frame(1), frame(2), frame(3), frame(2)],
+    },
+  ];
+  const label = object("title", "Ridge Title", hud, {
+    x: 25,
+    y: 22,
+    width: 300,
+    height: 28,
+  });
+  label.visual = {
+    kind: "text",
+    text: "LANTERN RIDGE",
+    color: "#ffdc9e",
+    size: 24,
+    screen: true,
+  };
+  const controls = object("controls", "Controls Hint", hud, {
+    x: 25,
+    y: 54,
+    width: 240,
+    height: 18,
+  });
+  controls.visual = {
+    kind: "text",
+    text: "A / D or arrow keys to explore",
+    color: "#f1cfbf",
+    size: 14,
+    screen: true,
+  };
+  const direction: Expression = { kind: "variable", id: "direction" };
+  const speed: Expression = { kind: "variable", id: "speed" };
+  const blocks: Block[] = [
+    {
+      id: "read-input",
+      kind: "set",
+      variable: "direction",
+      value: { kind: "input", id: "horizontal" },
+    },
+    {
+      id: "when-moving",
+      kind: "if",
+      condition: {
+        kind: "binary",
+        op: "!=",
+        left: direction,
+        right: literal(0),
+      },
+      then: [
+        {
+          id: "move-player",
+          kind: "move",
+          x: { kind: "binary", op: "*", left: direction, right: speed },
+          y: literal(0),
+        },
+        { id: "walk-animation", kind: "animate", clip: "Walk" },
+      ],
+      else: [{ id: "idle-animation", kind: "animate", clip: "Idle" }],
+    },
+  ];
+  return {
+    version: 1,
+    id: "lantern-ridge",
+    name: "Lantern Ridge",
+    width: 640,
+    height: 360,
+    startSceneId: "ridge-scene",
+    assets: [
+      { id: "ridge-art", name: "Ridge panorama", source: landscape },
+      { id: "keeper-art", name: "Lantern spritesheet", source: sheet },
+    ],
+    input: [
+      {
+        id: "horizontal",
+        name: "Horizontal",
+        negative: ["ArrowLeft", "KeyA"],
+        positive: ["ArrowRight", "KeyD"],
+      },
+      {
+        id: "vertical",
+        name: "Vertical",
+        negative: ["ArrowUp", "KeyW"],
+        positive: ["ArrowDown", "KeyS"],
+      },
+    ],
+    scenes: [
+      {
+        id: "ridge-scene",
+        name: "Lantern Ridge",
+        background: "#26304d",
+        camera: { x: 400, y: 180, zoom: 1, follow: "player", offsetY: -91 },
+        layers: [
+          { id: back, name: "Environment", visible: true },
+          { id: actors, name: "Characters", visible: true },
+          { id: hud, name: "HUD", visible: true },
+        ],
+        entities: [world, player, label, controls],
+        tilemap: { width: 40, height: 20, size: tileSize, tiles: [] },
+      },
+    ],
+    blueprints: [
+      {
+        version: 1,
+        id: "movement",
+        name: "Player Movement",
+        variables: [
+          { id: "direction", name: "direction", type: "number", initial: 0 },
+          { id: "speed", name: "speed", type: "number", initial: 150 },
+        ],
+        events: [
+          { id: "update-event", kind: "update", blocks },
+          {
+            id: "start-event",
+            kind: "start",
+            blocks: [
+              {
+                id: "start-log",
+                kind: "log",
+                value: literal("Lantern Ridge is ready."),
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
