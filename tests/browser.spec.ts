@@ -1549,6 +1549,7 @@ test("audits assets, authors an extension expression, and captures live reload t
   await page
     .getByRole("button", { name: "Close Extensions", exact: true })
     .click();
+  await page.getByRole("tab", { name: "Player Movement.blueprint" }).click();
 
   await page
     .getByRole("button", { name: "Edit Velocity X", exact: true })
