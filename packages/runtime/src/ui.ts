@@ -30,6 +30,7 @@ export class UiWorld {
     document: UiDocument | undefined,
     private data: GameData,
     private emit: (id: string, value?: Value) => void,
+    previous?: UiWorld,
   ) {
     this.document = document ?? emptyUi;
     this.widgets = new Map(
@@ -37,6 +38,27 @@ export class UiWorld {
     );
     if (this.document.initialFocus)
       this.focusRequest = { id: this.document.initialFocus };
+    if (previous) {
+      for (const widget of this.document.widgets) {
+        const old = previous.widgets.get(widget.id);
+        const patch = previous.changes.get(widget.id);
+        if (!old || old.kind !== widget.kind || !patch) continue;
+        const kept: Partial<View> = {};
+        if (old.text === widget.text && old.textBinding === widget.textBinding)
+          kept.text = patch.text;
+        if (
+          old.value === widget.value &&
+          old.valueBinding === widget.valueBinding &&
+          old.range === widget.range
+        )
+          kept.value = patch.value;
+        if (old.enabled === widget.enabled) kept.enabled = patch.enabled;
+        if (old.visible === widget.visible) kept.visible = patch.visible;
+        this.changes.set(widget.id, kept);
+      }
+      if (previous.focusRequest && this.available(previous.focusRequest.id))
+        this.focusRequest = previous.focusRequest;
+    }
   }
   get revision() {
     return this.changed + this.data.revision;

@@ -12,8 +12,8 @@ import {
 } from "pixi.js";
 import { fitFrame, type Draw } from "@mosaic/runtime";
 import { createLightmap } from "./lightmap";
+import { imageStream } from "./cache";
 import {
-  assetImages,
   insideImage,
   reportFrames,
   type Renderer,
@@ -62,10 +62,16 @@ export async function createPixi(
   app.stage.addChild(view, mask);
   view.addChild(background);
   view.mask = mask;
-  const resources = assetImages(options.assets, options.report);
   const badFrame = reportFrames(options.report);
   const textures = new Map<string, Texture>();
-  const frames = new Map<string, Texture>();
+  const frames = new Map<string, Map<string, Texture>>();
+  const resources = imageStream(options.assets, options.report, (id) => {
+    for (const texture of frames.get(id)?.values() ?? [])
+      texture.destroy(false);
+    frames.delete(id);
+    textures.get(id)?.destroy(true);
+    textures.delete(id);
+  });
   const slots: { node: Sprite | Text; kind: "image" | "text" }[] = [];
   const matrix = new Matrix();
   const tint = new Color();
@@ -76,7 +82,7 @@ export async function createPixi(
   let lightWidth = 0,
     lightHeight = 0;
   function spriteTexture(draw: Extract<Draw, { kind: "sprite" }>) {
-    const image = resources.images.get(draw.assetId);
+    const image = resources.get(draw.assetId);
     if (!image) return null;
     if (draw.frame && !insideImage(draw.frame, image)) {
       badFrame(draw.assetId);
@@ -90,23 +96,32 @@ export async function createPixi(
     }
     if (!draw.frame) return texture;
     const { x, y, w, h } = draw.frame;
-    const key = JSON.stringify([draw.assetId, x, y, w, h]);
-    let subtexture = frames.get(key);
+    const key = `${x},${y},${w},${h}`;
+    let atlas = frames.get(draw.assetId);
+    if (!atlas) {
+      atlas = new Map();
+      frames.set(draw.assetId, atlas);
+    }
+    let subtexture = atlas.get(key);
+    if (subtexture) atlas.delete(key);
     if (!subtexture) {
       subtexture = new Texture({
         source: texture.source,
         frame: new Rectangle(x, y, w, h),
       });
-      frames.set(key, subtexture);
     }
+    atlas.set(key, subtexture);
     return subtexture;
   }
   return {
     backend: "pixi",
+    updateAssets: resources.replace,
+    metrics: resources.metrics,
     resize(width, height) {
       app.renderer.resize(width, height);
     },
     render(frame) {
+      resources.prepare(frame.draws);
       const layout = fitFrame(
         frame.width,
         frame.height,
@@ -215,14 +230,20 @@ export async function createPixi(
         view.addChildAt(light, frame.lighting.worldDraws + 1);
       }
       app.render();
+      for (const atlas of frames.values()) {
+        if (atlas.size <= 512) continue;
+        for (const [key, frame] of atlas) {
+          if (atlas.size <= 512) break;
+          frame.destroy(false);
+          atlas.delete(key);
+        }
+      }
     },
     dispose() {
       canvas.removeEventListener("webglcontextlost", onLoss);
       light?.removeFromParent();
       light?.destroy({ texture: true, textureSource: true });
       app.destroy({ removeView: true }, { children: true });
-      for (const frame of frames.values()) frame.destroy(false);
-      for (const texture of textures.values()) texture.destroy(true);
       resources.dispose();
     },
   };

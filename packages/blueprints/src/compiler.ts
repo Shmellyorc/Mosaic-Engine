@@ -1,4 +1,9 @@
 import {
+  extensionBody,
+  extensionSchema,
+  type ExtensionManifest,
+} from "./extensions";
+import {
   displayValue,
   propertyTypes,
   typeOf,
@@ -163,6 +168,7 @@ export function compileBlueprint(
   axes: ReadonlySet<string>,
   signals: readonly Signal[] = [],
   data?: DataSymbols,
+  extensions: readonly ExtensionManifest[] = [],
 ) {
   const diagnostics: Diagnostic[] = [];
   const report = (blockId: string, message: string) =>
@@ -177,6 +183,12 @@ export function compileBlueprint(
     (blueprint.functions ?? []).map((fn) => [fn.id, fn]),
   );
   const signalsById = new Map(signals.map((signal) => [signal.id, signal]));
+  const extensionFunctions = new Map(
+    extensions.map((manifest) => [
+      manifest.id,
+      new Map(manifest.functions.map((fn) => [fn.id, fn])),
+    ]),
+  );
   const compiledFunctions = new Map<string, Instruction[]>();
   for (const variable of blueprint.variables) {
     register(variable.id);
@@ -193,6 +205,54 @@ export function compileBlueprint(
     switch (node.kind) {
       case "literal":
         return { type: typeOf(node.value), read: () => node.value };
+      case "extension": {
+        const fn = extensionFunctions
+          .get(node.extensionId)
+          ?.get(node.functionId);
+        if (!fn) {
+          report(id, "Choose an available extension function.");
+          return {
+            type: "number",
+            read: () => fault("Missing extension function."),
+          };
+        }
+        const types = new Map<string, ValueType>(
+          fn.parameters.map(({ id, type }) => [id, type]),
+        );
+        if (Object.keys(node.args).some((key) => !types.has(key)))
+          report(id, "Extension call contains an unknown argument.");
+        const args = fn.parameters.map(({ id: key, type }) => {
+          const arg = Object.hasOwn(node.args, key)
+            ? node.args[key]
+            : undefined;
+          if (!arg) report(id, 'Missing extension argument "' + key + '".');
+          return [key, arg && field(arg, id, scope, type)] as const;
+        });
+        let body: Read;
+        try {
+          body = field(
+            extensionBody(fn),
+            id,
+            { types, loop: false },
+            fn.result,
+          );
+        } catch (error) {
+          report(id, error instanceof Error ? error.message : String(error));
+          body = () => fault("Invalid extension function.");
+        }
+        return {
+          type: fn.result,
+          read(ctx, locals) {
+            const parameters = new Map<string, Value>();
+            for (const [key, read] of args)
+              parameters.set(
+                key,
+                read ? read(ctx, locals) : fault("Missing extension argument."),
+              );
+            return body(ctx, { locals: parameters });
+          },
+        };
+      }
       case "data": {
         const type = data ? data.readType(node.source, node.id) : node.type;
         if (!type || (node.source !== "locale" && !node.id))
@@ -774,4 +834,53 @@ export function compileBlueprint(
         blueprint.variables.map((variable) => [variable.id, variable.initial]),
       ),
   };
+}
+
+/** Validate every declaration using the same type checker that builds calls in games. */
+export function parseExtensionManifest(input: unknown): ExtensionManifest {
+  const manifest = extensionSchema.parse(input);
+  const ids = new Set<string>();
+  for (const fn of manifest.functions) {
+    if (ids.has(fn.id))
+      throw new Error("Duplicate extension function " + fn.id + ".");
+    ids.add(fn.id);
+    const probe: Blueprint = {
+      version: 2,
+      id: "extension",
+      name: manifest.name,
+      variables: [],
+      events: [
+        {
+          id: "probe",
+          kind: "start",
+          blocks: [
+            {
+              kind: "log",
+              id: "expression",
+              value: {
+                kind: "extension",
+                extensionId: manifest.id,
+                functionId: fn.id,
+                args: Object.fromEntries(
+                  fn.parameters.map(({ id, type }) => [
+                    id,
+                    {
+                      kind: "literal",
+                      value:
+                        type === "number" ? 0 : type === "boolean" ? false : "",
+                    },
+                  ]),
+                ),
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const [failure] = compileBlueprint(probe, new Set(), [], undefined, [
+      manifest,
+    ]).diagnostics;
+    if (failure) throw new Error(fn.name + " · " + failure.message);
+  }
+  return manifest;
 }

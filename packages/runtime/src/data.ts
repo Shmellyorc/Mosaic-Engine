@@ -60,7 +60,7 @@ function copyValue(value: Value): Value {
 }
 
 export class GameData {
-  readonly index: DataIndex;
+  index: DataIndex;
   private values: Map<string, Value>;
   private locale: string;
   revision = 0;
@@ -82,6 +82,34 @@ export class GameData {
     this.savedIds = catalog.globals
       .filter((global) => global.saved && !global.constant)
       .map(({ id }) => id);
+  }
+
+  reload(catalog: Catalog = emptyData) {
+    if (catalog === this.catalog) return;
+    const old = this.index;
+    const retained = this.values;
+    this.catalog = catalog;
+    this.index = indexCatalog(catalog);
+    this.values = this.defaults();
+    for (const definition of catalog.globals) {
+      const value = retained.get(definition.id);
+      if (
+        !definition.constant &&
+        value !== undefined &&
+        old.globals.get(definition.id)?.initial === definition.initial &&
+        this.index.globalMatches(definition, value)
+      )
+        this.values.set(definition.id, value);
+    }
+    if (!this.index.hasLocale(this.locale))
+      this.locale = catalog.localization.default;
+    this.migrations = new Map(
+      catalog.saves.migrations.map((step) => [step.from, step]),
+    );
+    this.savedIds = catalog.globals
+      .filter((entry) => entry.saved && !entry.constant)
+      .map(({ id }) => id);
+    this.revision++;
   }
 
   private defaults() {

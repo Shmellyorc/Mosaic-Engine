@@ -37,8 +37,18 @@ export class ParticleWorld {
   private free: Particle[] = [];
 
   constructor(entities: Entity[]) {
+    this.reload(entities);
+  }
+  reload(entities: Entity[]) {
+    const previous = this.emitters;
+    this.emitters = new Map();
     for (const entity of entities) {
       if (!entity.particles) continue;
+      const existing = previous.get(entity.id);
+      if (existing?.config === entity.particles) {
+        this.emitters.set(entity.id, existing);
+        continue;
+      }
       this.emitters.set(entity.id, {
         entity,
         config: entity.particles,
@@ -48,6 +58,14 @@ export class ParticleWorld {
         active: 0,
         pending: 0,
       });
+    }
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      const particle = this.active[i];
+      if (this.emitters.get(particle.emitter.entity.id) === particle.emitter)
+        continue;
+      this.active[i] = this.active[this.active.length - 1];
+      this.active.pop();
+      this.free.push(particle);
     }
   }
   get hasEmitters() {

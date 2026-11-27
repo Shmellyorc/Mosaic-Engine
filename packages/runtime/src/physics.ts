@@ -1,4 +1,5 @@
 import type { Entity, Scene } from "@mosaic/model";
+import { SpatialGrid } from "./spatial";
 import { type Point, type Rect, type TileWorld } from "./tiles";
 
 const EPSILON = 1e-7;
@@ -48,58 +49,6 @@ function sensorSweep(a: Rect, end: Rect, b: Rect, otherEnd: Rect) {
   return overlaps(sweep(a, x, a.y), b) || overlaps(sweep({ ...a, x }, x, y), b);
 }
 
-const BUCKET = 128;
-class BroadPhase {
-  private cells = new Map<string, Set<BodyState>>();
-  private membership = new Map<BodyState, string[]>();
-  private large = new Set<BodyState>();
-  keys(rect: Rect) {
-    const x0 = Math.floor(rect.x / BUCKET),
-      x1 = Math.floor((rect.x + rect.width) / BUCKET);
-    const y0 = Math.floor(rect.y / BUCKET),
-      y1 = Math.floor((rect.y + rect.height) / BUCKET);
-    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64) return [];
-    const keys: string[] = [];
-    for (let y = y0; y <= y1; y++)
-      for (let x = x0; x <= x1; x++) keys.push(x + "," + y);
-    return keys;
-  }
-  update(state: BodyState, rect: Rect) {
-    const keys = this.keys(rect);
-    const prior = this.membership.get(state);
-    if (
-      prior &&
-      prior.length === keys.length &&
-      prior.every((key, i) => key === keys[i])
-    )
-      return;
-    for (const key of prior ?? []) {
-      const cell = this.cells.get(key)!;
-      cell.delete(state);
-      if (!cell.size) this.cells.delete(key);
-    }
-    this.large.delete(state);
-    this.membership.set(state, keys);
-    if (!keys.length) this.large.add(state);
-    for (const key of keys) {
-      let cell = this.cells.get(key);
-      if (!cell) {
-        cell = new Set();
-        this.cells.set(key, cell);
-      }
-      cell.add(state);
-    }
-  }
-  query(rect: Rect): Iterable<BodyState> {
-    const keys = this.keys(rect);
-    if (!keys.length) return this.membership.keys();
-    const states = new Set(this.large);
-    for (const key of keys)
-      for (const item of this.cells.get(key) ?? []) states.add(item);
-    return states;
-  }
-}
-
 function clippedAxis(
   actor: Rect,
   collider: Rect,
@@ -132,7 +81,8 @@ function clippedAxis(
 
 export class PhysicsWorld {
   private states = new Map<string, BodyState>();
-  private index = new BroadPhase();
+  private index = new SpatialGrid<BodyState>();
+  private candidates = new Set<BodyState>();
   private watched: BodyState[] = [];
   private contacts = new Map<number, [BodyState, BodyState]>();
   private tileContacts = new Set<BodyState>();
@@ -140,21 +90,51 @@ export class PhysicsWorld {
     entities: Entity[],
     private tiles: TileWorld,
     private gravity: Scene["gravity"],
+    previous?: PhysicsWorld,
+    keepVelocity?: ReadonlySet<string>,
   ) {
     for (const entity of entities) {
       if (!entity.body || entity.parentId) continue;
       const physical = entity as Physical;
+      const retained = keepVelocity?.has(entity.id)
+        ? previous?.states.get(entity.id)
+        : undefined;
       const state: BodyState = {
         entity: physical,
         index: this.states.size,
-        velocity: { x: entity.body.velocityX, y: entity.body.velocityY },
-        movement: { x: 0, y: 0 },
+        velocity: retained
+          ? { ...retained.velocity }
+          : { x: entity.body.velocityX, y: entity.body.velocityY },
+        movement: retained ? { ...retained.movement } : { x: 0, y: 0 },
         start: bodyRect(physical),
       };
       this.states.set(entity.id, state);
       if (entity.body.enterSignal || entity.body.exitSignal)
         this.watched.push(state);
       this.index.update(state, state.start);
+    }
+    if (previous && keepVelocity) {
+      const watched = new Set(this.watched);
+      for (const [before, other] of previous.contacts.values()) {
+        const state = this.states.get(before.entity.id);
+        const neighbor = this.states.get(other.entity.id);
+        if (
+          state &&
+          neighbor &&
+          watched.has(state) &&
+          keepVelocity.has(state.entity.id) &&
+          keepVelocity.has(neighbor.entity.id)
+        )
+          this.contacts.set(state.index * this.states.size + neighbor.index, [
+            state,
+            neighbor,
+          ]);
+      }
+      for (const before of previous.tileContacts) {
+        const state = this.states.get(before.entity.id);
+        if (state && watched.has(state) && keepVelocity.has(state.entity.id))
+          this.tileContacts.add(state);
+      }
     }
   }
   request(id: string, x: number, y: number) {
@@ -180,7 +160,7 @@ export class PhysicsWorld {
     this.tiles.solids(area, (tile) => {
       change = clippedAxis(actor, tile, axis, change);
     });
-    for (const other of this.index.query(area)) {
+    for (const other of this.index.query(area, this.candidates)) {
       if (other !== state && other.entity.body.kind !== "sensor")
         change = clippedAxis(actor, bodyRect(other.entity), axis, change);
     }
@@ -246,12 +226,15 @@ export class PhysicsWorld {
       );
       if (tileContacts.has(state) && !this.tileContacts.has(state))
         notify({ entityId: state.entity.id, otherId: null, phase: "enter" });
-      for (const neighbor of this.index.query({
-        x: area.x - EPSILON,
-        y: area.y - EPSILON,
-        width: area.width + 2 * EPSILON,
-        height: area.height + 2 * EPSILON,
-      })) {
+      for (const neighbor of this.index.query(
+        {
+          x: area.x - EPSILON,
+          y: area.y - EPSILON,
+          width: area.width + 2 * EPSILON,
+          height: area.height + 2 * EPSILON,
+        },
+        this.candidates,
+      )) {
         if (
           neighbor === state ||
           (state.entity.body.kind === "static" &&

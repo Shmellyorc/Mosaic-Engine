@@ -1,3 +1,4 @@
+import { imageDimensions } from "./asset-audit";
 import { compileBlueprint } from "@mosaic/blueprints";
 import {
   MAX_IMAGE_BYTES,
@@ -181,15 +182,7 @@ export async function importImage() {
     selected = { name: file.name.slice(0, 100), source };
   }
   if (!selected) return false;
-  const image = new Image();
-  image.src = selected.source;
-  try {
-    await image.decode();
-  } catch {
-    throw new Error(`Could not decode "${selected.name}".`);
-  }
-  if (image.naturalWidth > 8192 || image.naturalHeight > 8192)
-    throw new Error("Image exceeds the 8192 pixel texture limit.");
+  await imageDimensions(selected);
   const asset = { ...selected, id: newId() };
   useEditor.getState().edit((project) => {
     project.assets.push(asset);
@@ -252,6 +245,7 @@ export async function exportGame() {
       axes,
       project.signals,
       data,
+      project.extensions,
     ).diagnostics;
     if (diagnostic)
       throw new Error(

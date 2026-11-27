@@ -1497,3 +1497,112 @@ test("offline Lantern Watch exposes responsive, keyboard-accessible widgets acro
   await expect(launch).toBeDisabled();
   await expect(page.locator("#runtime-error")).toBeEmpty();
 });
+
+test("audits assets, authors an extension expression, and captures live reload timing", async ({
+  page,
+}, testInfo) => {
+  await editor(page);
+  const projectTree = page.locator(".project-panel");
+  await projectTree
+    .getByRole("button", { name: "Ridge panorama", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Validate project assets" }).click();
+  await expect(
+    page
+      .getByRole("region", { name: "Asset validation results" })
+      .getByRole("status"),
+  ).toHaveText(/\d+ images and \d+ sounds checked · 0 issues/);
+
+  await page
+    .locator("details.menu > summary")
+    .getByText("Window", { exact: true })
+    .click();
+  await page.getByRole("menuitemcheckbox", { name: /Extensions/ }).click();
+  await page
+    .locator("details.menu > summary")
+    .getByText("Window", { exact: true })
+    .click();
+  const extensions = page.getByRole("tabpanel", { name: "Extensions" });
+  const manifest = {
+    version: 1,
+    id: "sample.scale",
+    name: "Scale tools",
+    functions: [
+      {
+        id: "double",
+        name: "Double",
+        parameters: [{ id: "amount", type: "number" }],
+        result: "number",
+        body: "amount * 2",
+      },
+    ],
+  };
+  await extensions.getByLabel("Extension manifest").setInputFiles({
+    name: "scale.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(manifest)),
+  });
+  await expect(extensions.getByText("Double", { exact: false })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Close Extensions", exact: true })
+    .click();
+
+  await page
+    .getByRole("button", { name: "Edit Velocity X", exact: true })
+    .click();
+  await page
+    .getByLabel("Velocity X source", { exact: true })
+    .selectOption("extension");
+  await expect(page.getByLabel("Velocity X extension function")).toHaveValue(
+    "sample.scale/double",
+  );
+  await page
+    .getByRole("button", { name: "Edit Velocity X amount", exact: true })
+    .click();
+  const value = page.getByLabel("Velocity X amount value", { exact: true });
+  await value.fill("12");
+  await value.press("Enter");
+
+  await page.getByRole("tab", { name: "Profiler", exact: true }).click();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  const profile = page.getByRole("tabpanel", { name: "Profiler" });
+  await expect(profile.getByRole("status")).toHaveText(/\d+ sampled frames/);
+  await value.fill("27");
+  await value.press("Enter");
+  await expect(profile.locator("dd").last()).toHaveText(/^1 · .* ms last$/);
+  const capture = page.waitForEvent("download");
+  await profile.getByRole("button", { name: "Download capture" }).click();
+  const profileData = JSON.parse(
+    await readFile((await (await capture).path())!, "utf8"),
+  );
+  expect(profileData.reloads).toBe(1);
+  expect(profileData.frames.length).toBeGreaterThan(0);
+  expect(profileData.details.backend).toBe("Canvas 2D");
+  expect(profileData.details.textures.resident).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+
+  const save = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  const document = parseProject(
+    await readFile((await (await save).path())!, "utf8"),
+  );
+  expect(document.extensions).toEqual([manifest]);
+  expect(JSON.stringify(document.blueprints)).toContain(
+    JSON.stringify({
+      kind: "extension",
+      extensionId: "sample.scale",
+      functionId: "double",
+      args: { amount: { kind: "literal", value: 27 } },
+    }),
+  );
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const path = testInfo.outputPath("with-extension.html");
+  await (await download).saveAs(path);
+  const exported = await page.context().newPage();
+  await exported.goto(pathToFileURL(path).href);
+  await expect(exported.locator("#game canvas")).toBeVisible();
+  await expect(exported.locator("#runtime-error")).toHaveText("");
+  await exported.close();
+});

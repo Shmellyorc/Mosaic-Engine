@@ -37,8 +37,10 @@ import {
   SOUTH,
   WEST,
   type TileGrid,
+  type Rect,
 } from "./tiles";
 import { PhysicsWorld } from "./physics";
+import { SpatialGrid } from "./spatial";
 import { NavigationGrid, NavigationWorld } from "./navigation";
 import { AnimationPlayer, MotionWorld } from "./motion";
 import { ParticleWorld } from "./particles";
@@ -46,7 +48,14 @@ import type { AudioCommand } from "./audio";
 export { AudioMixer } from "./audio";
 export { AnimationPlayer, sampleClip } from "./motion";
 export type { Camera } from "./camera";
-export { TileWorld, TileGrid, autotileFrame, TILE_CHUNK_SIZE } from "./tiles";
+export {
+  TileWorld,
+  TileGrid,
+  autotileFrame,
+  TILE_CHUNK_SIZE,
+  RESIDENT_TILE_CHUNKS,
+} from "./tiles";
+export { SpatialGrid } from "./spatial";
 export { cameraView } from "./camera";
 export { PhysicsWorld, bodyRect } from "./physics";
 export { NavigationGrid, entityCenter } from "./navigation";
@@ -100,8 +109,81 @@ type WorldEntity = {
   entity: Entity;
   variables: Map<string, Value>;
   animation?: AnimationPlayer;
+  parent?: WorldEntity;
+  rank: number;
+  pose: WorldTransform;
 };
-type WorldTransform = { matrix: Matrix2D; alpha: number; visible: boolean };
+type WorldTransform = {
+  matrix: Matrix2D;
+  alpha: number;
+  visible: boolean;
+  rotation: number;
+  cos: number;
+  sin: number;
+  width: number;
+  height: number;
+  revision: number;
+  indexed: number;
+  bounds: Rect;
+};
+
+const pose = (): WorldTransform => ({
+  matrix: { a: 1, b: 0, c: 0, d: 1, x: 0, y: 0 },
+  alpha: 1,
+  visible: false,
+  rotation: 0,
+  cos: 1,
+  sin: 0,
+  width: 0,
+  height: 0,
+  revision: 0,
+  indexed: -1,
+  bounds: { x: 0, y: 0, width: 0, height: 0 },
+});
+
+function instantiateEntity(source: Entity): Entity {
+  if (
+    source.clips.length ||
+    source.visual?.kind === "sprite" ||
+    source.animator ||
+    source.body ||
+    source.navigation ||
+    source.light ||
+    source.particles
+  )
+    return structuredClone(source);
+  return {
+    ...source,
+    transform: { ...source.transform },
+    visual: source.visual && { ...source.visual },
+    clips: [],
+  };
+}
+
+function measureBounds(
+  output: Rect,
+  matrix: Matrix2D,
+  width: number,
+  height: number,
+) {
+  const x = matrix.a * width,
+    y = matrix.b * width;
+  const u = matrix.c * height,
+    v = matrix.d * height;
+  output.x = matrix.x + Math.min(0, x) + Math.min(0, u);
+  output.y = matrix.y + Math.min(0, y) + Math.min(0, v);
+  output.width = Math.abs(x) + Math.abs(u);
+  output.height = Math.abs(y) + Math.abs(v);
+}
+
+function intersects(a: Rect, b: Rect) {
+  return !(
+    a.x + a.width < b.x ||
+    a.y + a.height < b.y ||
+    b.x + b.width < a.x ||
+    b.y + b.height < a.y
+  );
+}
 
 export function transformPoint(m: Matrix2D, x: number, y: number) {
   return { x: m.a * x + m.c * y + m.x, y: m.b * x + m.d * y + m.y };
@@ -144,6 +226,10 @@ export function fitFrame(
 export class InputState {
   private held = new Set<string>();
   constructor(private axes: Project["input"]) {}
+  configure(axes: Project["input"]) {
+    this.axes = axes;
+    for (const code of this.held) if (!this.uses(code)) this.held.delete(code);
+  }
   press(code: string) {
     this.held.add(code);
   }
@@ -203,14 +289,19 @@ export function connectKeyboard(
 export class Game {
   readonly input: InputState;
   readonly data: GameData;
-  readonly ui: UiWorld;
+  ui: UiWorld;
   readonly logs: RuntimeLog[] = [];
-  readonly scene: Scene;
+  scene: Scene;
   private scheduler: BlueprintScheduler;
   private reported = new Set<string>();
   private world = new Map<string, WorldEntity>();
   private assets: Set<string>;
   private entities: WorldEntity[];
+  private hierarchy: WorldEntity[] = [];
+  private textEntries: WorldEntity[] = [];
+  private animations: AnimationPlayer[] = [];
+  private renderIndex = new SpatialGrid<WorldEntity>(128, 192);
+  private renderCandidates = new Set<WorldEntity>();
   private program: Binding[] = [];
   private documents = new Map<string, Blueprint>();
   private signals: readonly Signal[];
@@ -250,7 +341,7 @@ export class Game {
   time = 0;
 
   constructor(
-    readonly project: Project,
+    public project: Project,
     sceneId = project.startSceneId,
     debug = false,
     slots?: SlotStorage,
@@ -262,12 +353,7 @@ export class Game {
     this.data = new GameData(project.id, project.data, slots);
     this.tiles = new TileWorld(scene.tilemap);
     this.scheduler = new BlueprintScheduler(STEP, debug);
-    this.ui = new UiWorld(scene.ui, this.data, (id, payload) => {
-      const type = this.signalTypes.get(id);
-      if (type !== (payload === undefined ? "void" : typeOf(payload)))
-        throw Error("The UI event is missing or has the wrong payload type.");
-      this.scheduler.queueUi(id, payload);
-    });
+    this.ui = this.createUi(scene);
     this.assets = new Set(project.assets.map((asset) => asset.id));
     this.signals = project.signals ?? emptySignals;
     this.layerOrder = new Map(
@@ -278,15 +364,14 @@ export class Game {
         this.layerOrder.get(a.layerId)! - this.layerOrder.get(b.layerId)! ||
         a.order - b.order,
     );
-    this.entities = sorted.map((source) => {
-      const entity = structuredClone(source);
+    this.entities = sorted.map((source, rank) => {
+      const entity = instantiateEntity(source);
       const state: WorldEntity = {
         entity,
         variables: new Map(),
-        animation:
-          entity.visual?.kind === "sprite" && entity.clips.length
-            ? new AnimationPlayer(entity.animator, entity.clips)
-            : undefined,
+        rank,
+        pose: pose(),
+        animation: this.animationFor(entity),
       };
       this.world.set(entity.id, state);
       return state;
@@ -307,12 +392,221 @@ export class Game {
     this.layerVisible = new Map(
       scene.layers.map((layer) => [layer.id, layer.visible]),
     );
+    this.buildHierarchy();
     this.reloadBlueprints(project.blueprints, this.signals);
+  }
+
+  private createUi(scene: Scene, previous?: UiWorld) {
+    return new UiWorld(
+      scene.ui,
+      this.data,
+      (id, payload) => {
+        const type = this.signalTypes.get(id);
+        if (type !== (payload === undefined ? "void" : typeOf(payload)))
+          throw Error("The UI event is missing or has the wrong payload type.");
+        this.scheduler.queueUi(id, payload);
+      },
+      previous,
+    );
+  }
+
+  // Apply authored edits at the boundary between animation frames. Keep live values
+  // for retained entities unless the corresponding authored field was changed.
+  reloadProject(project: Project) {
+    if (project === this.project) return true;
+    const previous = this.project;
+    const oldScene = this.scene;
+    const scene = project.scenes.find(({ id }) => id === oldScene.id);
+    if (project.id !== previous.id || !scene) return false;
+    this.project = project;
+    this.scene = scene;
+    const assetsChanged = previous.assets !== project.assets;
+    const axesChanged = previous.input !== project.input;
+    const dataChanged = previous.data !== project.data;
+    if (axesChanged) this.input.configure(project.input);
+    if (assetsChanged)
+      this.assets = new Set(project.assets.map(({ id }) => id));
+    if (dataChanged) this.data.reload(project.data);
+    if (previous.mixer !== project.mixer)
+      this.soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
+    if (oldScene.ui !== scene.ui) this.ui = this.createUi(scene, this.ui);
+    if (
+      oldScene.camera !== scene.camera ||
+      previous.width !== project.width ||
+      previous.height !== project.height
+    )
+      this.currentCamera = undefined;
+    if (oldScene.layers !== scene.layers) {
+      this.layerOrder = new Map(
+        scene.layers.map(({ id }, index) => [id, index]),
+      );
+      this.layerVisible = new Map(
+        scene.layers.map(({ id, visible }) => [id, visible]),
+      );
+    }
+    let rebuildWorld =
+      oldScene.tilemap !== scene.tilemap || oldScene.gravity !== scene.gravity;
+    let rebuildNavigation = false;
+    let rebuildParticles = false;
+    let rebind = false;
+    const added = new Set<string>();
+    const keepVelocity = new Set<string>();
+    if (
+      oldScene.entities !== scene.entities ||
+      oldScene.layers !== scene.layers
+    ) {
+      const oldById = new Map(
+        oldScene.entities.map((entity) => [entity.id, entity]),
+      );
+      const nextById = new Map<string, WorldEntity>();
+      const next = [...scene.entities].sort(
+        (a, b) =>
+          this.layerOrder.get(a.layerId)! - this.layerOrder.get(b.layerId)! ||
+          a.order - b.order,
+      );
+      this.entities = next.map((source, rank) => {
+        let state = this.world.get(source.id);
+        const authored = oldById.get(source.id);
+        if (!state || !authored) {
+          const entity = instantiateEntity(source);
+          state = {
+            entity,
+            rank,
+            pose: pose(),
+            variables: new Map(),
+            animation: this.animationFor(entity),
+          };
+          added.add(source.id);
+          rebuildNavigation = true;
+          rebuildWorld ||= !!source.body || !!source.navigation;
+          rebuildParticles ||= !!source.particles;
+          rebind ||= !!source.blueprintId;
+        } else {
+          // A valid layer, visibility, and pose can change without replacing the state instance.
+          const { entity, pose } = state;
+          const transformFields = Object.keys(
+            source.transform,
+          ) as (keyof Entity["transform"])[];
+          for (const field of transformFields)
+            if (authored.transform[field] !== source.transform[field])
+              entity.transform[field] = source.transform[field];
+          for (const field of [
+            "name",
+            "parentId",
+            "layerId",
+            "order",
+            "visible",
+            "blueprintId",
+          ] as const)
+            if (authored[field] !== source[field])
+              Object.assign(entity, { [field]: source[field] });
+          if (authored.visual !== source.visual) {
+            entity.visual = structuredClone(source.visual);
+            this.renderIndex.remove(state);
+            pose.indexed = -1;
+          }
+          if (
+            authored.clips !== source.clips ||
+            authored.animator !== source.animator ||
+            authored.visual?.kind !== source.visual?.kind
+          ) {
+            entity.clips = structuredClone(source.clips);
+            entity.animator = structuredClone(source.animator);
+            state.animation = this.animationFor(entity);
+          }
+          if (authored.body !== source.body) {
+            entity.body = structuredClone(source.body);
+            rebuildWorld = true;
+          } else keepVelocity.add(source.id);
+          if (
+            authored.navigation !== source.navigation ||
+            authored.parentId !== source.parentId ||
+            (source.body?.kind === "static" &&
+              authored.transform !== source.transform)
+          )
+            rebuildWorld = true;
+          if (authored.navigation !== source.navigation)
+            entity.navigation = structuredClone(source.navigation);
+          if (authored.light !== source.light)
+            entity.light = structuredClone(source.light);
+          if (authored.particles !== source.particles) {
+            entity.particles = structuredClone(source.particles);
+            rebuildParticles = true;
+          }
+          if (authored.blueprintId !== source.blueprintId) rebind = true;
+        }
+        state.rank = rank;
+        nextById.set(source.id, state);
+        return state;
+      });
+      for (const [id, state] of this.world) {
+        if (nextById.has(id)) continue;
+        rebuildNavigation = true;
+        this.motion.removeEntity(id);
+        this.renderIndex.remove(state);
+        rebuildWorld ||= !!state.entity.body || !!state.entity.navigation;
+        rebuildParticles ||= !!state.entity.particles;
+        rebind ||= !!state.entity.blueprintId;
+      }
+      this.world = nextById;
+      this.lights = this.entities.filter(({ entity }) => entity.light);
+      this.buildHierarchy();
+    } else if (rebuildWorld) {
+      for (const { entity } of this.entities) keepVelocity.add(entity.id);
+    }
+    if (oldScene.tilemap !== scene.tilemap)
+      this.tiles = new TileWorld(scene.tilemap);
+    if (rebuildWorld || rebuildNavigation || rebuildParticles) {
+      const entities = this.entities.map(({ entity }) => entity);
+      if (rebuildWorld) {
+        this.physics = new PhysicsWorld(
+          entities,
+          this.tiles,
+          scene.gravity,
+          this.physics,
+          keepVelocity,
+        );
+      }
+      if (rebuildWorld || rebuildNavigation)
+        this.navigation = new NavigationWorld(
+          new NavigationGrid(this.tiles, entities),
+          entities,
+        );
+      if (rebuildParticles) this.particles.reload(entities);
+    }
+    if (oldScene.timelines !== scene.timelines)
+      this.motion.reload(scene.timelines ?? [], this.started);
+    if (
+      rebind ||
+      dataChanged ||
+      axesChanged ||
+      previous.extensions !== project.extensions ||
+      previous.blueprints !== project.blueprints ||
+      previous.signals !== project.signals
+    ) {
+      this.reloadBlueprints(
+        project.blueprints,
+        project.signals ?? emptySignals,
+        dataChanged ||
+          axesChanged ||
+          previous.extensions !== project.extensions,
+      );
+      if (this.started && added.size)
+        this.scheduler.start(this.program.filter(({ id }) => added.has(id)));
+    }
+    return true;
+  }
+
+  private animationFor(entity: Entity) {
+    return entity.visual?.kind === "sprite" && entity.clips.length
+      ? new AnimationPlayer(entity.animator, entity.clips)
+      : undefined;
   }
 
   reloadBlueprints(
     blueprints: Blueprint[],
     signals: readonly Signal[] = this.signals,
+    force = false,
   ) {
     const documents = new Map(
       blueprints.map((blueprint) => [blueprint.id, blueprint]),
@@ -330,6 +624,8 @@ export class Game {
       const definition = id && documents.get(id);
       if (
         old &&
+        old.blueprintId === (definition && definition.id) &&
+        !force &&
         sameSignals &&
         definition &&
         definition === this.documents.get(definition.id)
@@ -342,12 +638,18 @@ export class Game {
             this.reported.delete(key);
       }
       if (!definition) {
-        state.variables = new Map();
+        if (old) state.variables = new Map();
         return [];
       }
       let program = compiled.get(definition.id);
       if (!program) {
-        program = compileBlueprint(definition, axes, signals, this.data.index);
+        program = compileBlueprint(
+          definition,
+          axes,
+          signals,
+          this.data.index,
+          this.project.extensions,
+        );
         compiled.set(definition.id, program);
       }
       const variables = program.createVariables();
@@ -368,6 +670,9 @@ export class Game {
         },
       ];
     });
+    for (const old of previous.values()) {
+      if (!this.world.has(old.id)) changed.add(old);
+    }
     this.documents = documents;
     this.signals = signals;
     this.signalTypes = new Map(
@@ -485,15 +790,18 @@ export class Game {
 
   private stepParticles(delta: number) {
     if (!this.particles.hasEmitters) return;
-    let transforms: Map<string, WorldTransform> | undefined;
+    let refreshed = false;
     this.particles.step(delta, (id) => {
       const entity = this.world.get(id)!.entity;
       if (!entity.visible || !this.layerVisible.get(entity.layerId)) return;
       const { x, y, width, height, scaleX, scaleY, rotation } =
         entity.transform;
       if (entity.parentId) {
-        transforms ??= this.transforms();
-        const world = transforms.get(id)!;
+        if (!refreshed) {
+          this.refreshTransforms();
+          refreshed = true;
+        }
+        const world = this.world.get(id)!.pose;
         return world.visible
           ? transformPoint(world.matrix, width / 2, height / 2)
           : undefined;
@@ -583,7 +891,7 @@ export class Game {
       this.currentCamera,
       STEP,
     );
-    for (const state of this.entities) state.animation?.step(STEP);
+    for (const animation of this.animations) animation.step(STEP);
     this.stepParticles(STEP);
     this.time += STEP;
   }
@@ -613,54 +921,113 @@ export class Game {
     return this.world.get(id)?.variables;
   }
 
-  private transforms() {
-    const resolved = new Map<string, WorldTransform>();
+  private buildHierarchy() {
+    this.hierarchy = [];
+    this.textEntries = [];
+    this.animations = [];
+    const placed = new Set<WorldEntity>();
     for (const state of this.entities) {
-      const chain: Entity[] = [];
-      let entity: Entity | undefined = state.entity;
-      while (entity && !resolved.has(entity.id)) {
-        chain.push(entity);
-        entity = entity.parentId
-          ? this.world.get(entity.parentId)?.entity
-          : undefined;
-      }
-      for (let i = chain.length - 1; i >= 0; i--) {
-        const child = chain[i];
-        const t = child.transform;
-        const radians = ((t.rotation % 360) * Math.PI) / 180;
-        const cos = Math.cos(radians);
-        const sin = Math.sin(radians);
-        const local = {
-          a: cos * t.scaleX,
-          b: sin * t.scaleX,
-          c: -sin * t.scaleY,
-          d: cos * t.scaleY,
-          x: t.x,
-          y: t.y,
-        };
-        const parent = child.parentId
-          ? resolved.get(child.parentId)
-          : undefined;
-        resolved.set(child.id, {
-          matrix: parent ? multiply(parent.matrix, local) : local,
-          alpha: (parent?.alpha ?? 1) * t.alpha,
-          visible: Boolean(
-            this.layerVisible.get(child.layerId) &&
-            child.visible &&
-            (parent?.visible ?? true),
-          ),
-        });
-      }
+      state.parent = state.entity.parentId
+        ? this.world.get(state.entity.parentId)
+        : undefined;
+      if (state.entity.visual?.kind === "text") this.textEntries.push(state);
+      if (state.animation) this.animations.push(state.animation);
     }
-    return resolved;
+    const branch: WorldEntity[] = [];
+    for (const state of this.entities) {
+      if (placed.has(state)) continue;
+      branch.length = 0;
+      let cursor: WorldEntity | undefined = state;
+      while (cursor && !placed.has(cursor)) {
+        branch.push(cursor);
+        placed.add(cursor);
+        cursor = cursor.parent;
+      }
+      for (let i = branch.length - 1; i >= 0; i--)
+        this.hierarchy.push(branch[i]);
+    }
+  }
+
+  private updateTransform(state: WorldEntity) {
+    const { entity, pose } = state;
+    const { transform: t } = entity;
+    if (t.rotation !== pose.rotation) {
+      pose.rotation = t.rotation;
+      const radians = ((t.rotation % 360) * Math.PI) / 180;
+      pose.cos = Math.cos(radians);
+      pose.sin = Math.sin(radians);
+    }
+    const parent = state.parent?.pose;
+    pose.alpha = (parent?.alpha ?? 1) * t.alpha;
+    pose.visible = Boolean(
+      this.layerVisible.get(entity.layerId) &&
+      entity.visible &&
+      (parent?.visible ?? true),
+    );
+    const p = parent?.matrix;
+    const la = pose.cos * t.scaleX,
+      lb = pose.sin * t.scaleX;
+    const lc = -pose.sin * t.scaleY,
+      ld = pose.cos * t.scaleY;
+    const a = p ? p.a * la + p.c * lb : la;
+    const b = p ? p.b * la + p.d * lb : lb;
+    const c = p ? p.a * lc + p.c * ld : lc;
+    const d = p ? p.b * lc + p.d * ld : ld;
+    const x = p ? p.a * t.x + p.c * t.y + p.x : t.x;
+    const y = p ? p.b * t.x + p.d * t.y + p.y : t.y;
+    const m = pose.matrix;
+    if (
+      m.a === a &&
+      m.b === b &&
+      m.c === c &&
+      m.d === d &&
+      m.x === x &&
+      m.y === y &&
+      pose.width === t.width &&
+      pose.height === t.height
+    )
+      return;
+    m.a = a;
+    m.b = b;
+    m.c = c;
+    m.d = d;
+    m.x = x;
+    m.y = y;
+    pose.width = t.width;
+    pose.height = t.height;
+    pose.revision++;
+  }
+
+  private refreshTransforms(index = false) {
+    for (const state of this.hierarchy) {
+      this.updateTransform(state);
+      const { entity, pose } = state;
+      if (
+        !index ||
+        pose.indexed === pose.revision ||
+        !entity.visual ||
+        entity.visual.kind === "text"
+      )
+        continue;
+      measureBounds(pose.bounds, pose.matrix, pose.width, pose.height);
+      this.renderIndex.update(state, pose.bounds);
+      pose.indexed = pose.revision;
+    }
   }
 
   worldPoint(id: string) {
-    const entity = this.world.get(id)?.entity;
-    if (!entity) return undefined;
-    return entity.parentId
-      ? this.transforms().get(entity.id)?.matrix
-      : entity.transform;
+    const state = this.world.get(id);
+    if (!state) return undefined;
+    if (!state.parent) return state.entity.transform;
+    const branch: WorldEntity[] = [];
+    let current: WorldEntity | undefined = state;
+    while (current) {
+      branch.push(current);
+      current = current.parent;
+    }
+    for (let i = branch.length - 1; i >= 0; i--)
+      this.updateTransform(branch[i]);
+    return { ...state.pose.matrix };
   }
   private cameraTarget() {
     return this.scene.camera.follow
@@ -679,9 +1046,22 @@ export class Game {
     );
   }
 
+  renderMetrics() {
+    return {
+      entities: this.entities.length,
+      candidates: this.renderCandidates.size,
+      chunks:
+        this.tiles.legacy.residentChunks +
+        this.tiles.layers.reduce(
+          (sum, { grid }) => sum + grid.residentChunks,
+          0,
+        ),
+    };
+  }
+
   frame(cameraOverride?: Camera): RenderFrame {
     const { width, height } = this.project;
-    const transforms = this.transforms();
+    this.refreshTransforms(true);
     const view = cameraOverride ?? this.view();
     const cameraMatrix = {
       a: view.zoom,
@@ -790,47 +1170,38 @@ export class Game {
         }
       }
     };
-    for (const state of this.entities) {
-      const { entity } = state;
+    const candidates = this.renderIndex.query(area, this.renderCandidates);
+    for (const state of this.textEntries) candidates.add(state);
+    for (const state of [...candidates].sort((a, b) => a.rank - b.rank)) {
+      const { entity, pose: world } = state;
       paintLayers(this.layerOrder.get(entity.layerId)!);
-      const world = transforms.get(entity.id)!;
       const visual = entity.visual;
-      if (!visual || !world.visible || !world.alpha) continue;
+      if (
+        !visual ||
+        !world.visible ||
+        !world.alpha ||
+        (visual.kind !== "text" && !intersects(world.bounds, area))
+      )
+        continue;
       const screen = visual.kind === "text" && visual.screen;
-      const matrix = screen
-        ? world.matrix
-        : multiply(cameraMatrix, world.matrix);
-      const dimensions = {
-        width: entity.transform.width,
-        height: entity.transform.height,
-      };
       const base = {
-        ...dimensions,
-        matrix,
+        width: world.width,
+        height: world.height,
+        matrix: screen
+          ? { ...world.matrix }
+          : multiply(cameraMatrix, world.matrix),
         alpha: world.alpha,
         entityId: entity.id,
       };
-      if (visual.kind === "text") {
+      if (visual.kind === "text")
         (screen ? hud : draws).push({ ...base, ...visual });
-        continue;
-      }
-      const corners = [
-        transformPoint(matrix, 0, 0),
-        transformPoint(matrix, dimensions.width, 0),
-        transformPoint(matrix, 0, dimensions.height),
-        transformPoint(matrix, dimensions.width, dimensions.height),
-      ];
-      if (
-        corners.every((p) => p.x < 0) ||
-        corners.every((p) => p.y < 0) ||
-        corners.every((p) => p.x > width) ||
-        corners.every((p) => p.y > height)
-      )
-        continue;
-      if (visual.kind === "sprite") {
-        const frame = state.animation?.frame();
-        draws.push({ ...base, ...visual, frame: frame ?? visual.frame });
-      } else draws.push({ ...base, ...visual });
+      else if (visual.kind === "sprite")
+        draws.push({
+          ...base,
+          ...visual,
+          frame: state.animation?.frame() ?? visual.frame,
+        });
+      else draws.push({ ...base, ...visual });
     }
     paintLayers(Math.max(1, this.scene.layers.length - 1));
     flushParticles();
@@ -839,9 +1210,8 @@ export class Game {
       ? { ambient: config.ambient, worldDraws: draws.length, lights: [] }
       : undefined;
     if (lighting) {
-      for (const { entity } of this.lights) {
+      for (const { entity, pose: transform } of this.lights) {
         const light = entity.light!;
-        const transform = transforms.get(entity.id);
         if (!light.enabled || !light.intensity || !transform?.visible) continue;
         const { x, y } = transformPoint(
           cameraMatrix,

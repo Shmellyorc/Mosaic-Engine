@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { blueprintSchema, signalSchema } from "@mosaic/blueprints";
+import {
+  blueprintSchema,
+  extensionSchema,
+  parseExtensionManifest,
+  signalSchema,
+} from "@mosaic/blueprints";
 
 import {
   animatorSchema,
@@ -245,6 +250,7 @@ const projectSchema = z.object({
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
+  extensions: z.array(extensionSchema).max(64).optional(),
   mixer: mixerSchema.optional(),
   data: catalogSchema.optional(),
   signals: z.array(signalSchema).max(256).optional(),
@@ -294,6 +300,9 @@ export function validateProject(input: unknown): Project {
   const assetIds = idsOf(project.assets, "asset");
   const blueprintIds = idsOf(project.blueprints, "blueprint");
   idsOf(project.input, "input");
+  idsOf(project.extensions ?? [], "extension");
+  for (const extension of project.extensions ?? [])
+    parseExtensionManifest(extension);
   idsOf(project.signals ?? [], "event");
   const signals = new Map(
     (project.signals ?? []).map((signal) => [signal.id, signal.type]),

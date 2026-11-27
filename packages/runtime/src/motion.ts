@@ -174,6 +174,23 @@ export class MotionWorld {
     for (const timeline of this.timelines.values())
       if (timeline.autoplay) this.play(timeline.id, true);
   }
+  reload(timelines: Timeline[], started: boolean) {
+    const previous = this.timelines;
+    this.timelines = new Map(
+      timelines.map((definition) => [definition.id, definition]),
+    );
+    for (const [id, playback] of this.active)
+      if (this.timelines.get(id) !== playback.definition)
+        this.active.delete(id);
+    if (started)
+      for (const definition of timelines)
+        if (definition.autoplay && previous.get(definition.id) !== definition)
+          this.play(definition.id, true);
+  }
+  removeEntity(id: string) {
+    for (const [key, tween] of this.tweens)
+      if (tween.entity.id === id) this.tweens.delete(key);
+  }
   play(id: string, playing: boolean) {
     const definition = this.timelines.get(id);
     if (!definition) throw new Error("Timeline is missing from this scene.");

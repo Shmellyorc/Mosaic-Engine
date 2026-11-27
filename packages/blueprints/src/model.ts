@@ -117,6 +117,12 @@ export type Expression =
       key: string;
       type: Exclude<ValueType, "record">;
     }
+  | {
+      kind: "extension";
+      extensionId: string;
+      functionId: string;
+      args: Record<string, Expression>;
+    }
   | { kind: "query"; query: "self" | "parent" | "scene" }
   | {
       kind: "data";
@@ -170,6 +176,17 @@ export const expressionSchema: z.ZodType<Expression> = z.lazy(() =>
       id: text,
       type: valueType,
       key: expressionSchema.optional(),
+    }),
+    z.object({
+      kind: z.literal("extension"),
+      extensionId: id,
+      functionId: id,
+      args: z
+        .record(id, expressionSchema)
+        .refine(
+          (args) => Object.keys(args).length <= 8,
+          "Expected at most eight arguments.",
+        ),
     }),
     z.object({
       kind: z.literal("query"),

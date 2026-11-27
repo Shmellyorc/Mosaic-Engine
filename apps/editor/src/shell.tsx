@@ -14,6 +14,7 @@ import {
   type SerializedDockview,
 } from "dockview-react";
 import {
+  Activity,
   AudioLines,
   Database,
   Box,
@@ -31,6 +32,7 @@ import {
   LayoutPanelLeft,
   Monitor,
   Pause,
+  Puzzle,
   Play,
   Plus,
   Redo2,
@@ -56,6 +58,8 @@ import {
   addEntity,
 } from "./panels";
 import { AnimatorWorkspace, InputWorkspace } from "./systems";
+import { ExtensionPanel } from "./extensions";
+import { ProfilerPanel } from "./profiler";
 import { TimelineWorkspace } from "./timeline";
 import { ParticlesWorkspace } from "./particles";
 import { AudioWorkspace } from "./audio";
@@ -260,6 +264,20 @@ const registry: Record<
     width: 175,
     height: 95,
   },
+  extensions: {
+    title: "Extensions",
+    component: ExtensionPanel,
+    icon: Puzzle,
+    width: 225,
+    height: 130,
+  },
+  profiler: {
+    title: "Profiler",
+    component: ProfilerPanel,
+    icon: Activity,
+    width: 215,
+    height: 130,
+  },
   debug: {
     title: "Debug",
     component: DebugPanel,
@@ -354,6 +372,7 @@ function reset(api: DockviewApi) {
     { initialHeight: 170 },
   );
   addPanel(api, "console", { referencePanel: "debug" }, undefined, true);
+  addPanel(api, "profiler", { referencePanel: "debug" }, undefined, true);
   lockWorkspace(api);
 }
 function restore(api: DockviewApi, value: SerializedDockview) {
@@ -500,7 +519,7 @@ export function App() {
       return;
     }
     const left = ["project", "hierarchy", "assets", "library"].includes(id);
-    const bottom = ["preview", "console", "debug"].includes(id);
+    const bottom = ["preview", "console", "debug", "profiler"].includes(id);
     addPanel(
       api,
       id,

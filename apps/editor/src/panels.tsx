@@ -1,3 +1,4 @@
+import { auditAssets } from "./asset-audit";
 import {
   Box,
   ChevronDown,
@@ -205,10 +206,30 @@ export function ProjectPanel() {
 }
 
 export function AssetPanel({ onImport }: { onImport: () => void }) {
-  const assets = useEditor((state) => state.project.assets);
+  const project = useEditor((state) => state.project);
+  const { assets } = project;
+  const [audit, setAudit] = useState<{
+    project: typeof project;
+    result: Awaited<ReturnType<typeof auditAssets>>;
+  }>();
+  const [checking, setChecking] = useState(false);
+  const [page, setPage] = useState(0);
   const selected = useEditor(selectedEntity);
   const selectedAssetId = useEditor((state) => state.selectedAssetId);
   const asset = assets.find((item) => item.id === selectedAssetId);
+  const pageSize = 100;
+  const currentPage = Math.min(
+    page,
+    Math.max(0, Math.ceil(assets.length / pageSize) - 1),
+  );
+  async function validate() {
+    setChecking(true);
+    try {
+      setAudit({ project, result: await auditAssets(project) });
+    } finally {
+      setChecking(false);
+    }
+  }
   const alreadyAssigned =
     selected?.visual?.kind === "sprite" &&
     selected.visual.assetId === asset?.id;
@@ -217,19 +238,62 @@ export function AssetPanel({ onImport }: { onImport: () => void }) {
       <button className="section-button" onClick={onImport}>
         <Upload size={15} /> Import image
       </button>
+      <button
+        className="section-button"
+        onClick={() => void validate()}
+        disabled={checking}
+      >
+        {checking ? "Validating assets…" : "Validate project assets"}
+      </button>
+      {audit?.project === project && (
+        <section aria-label="Asset validation results">
+          <p role="status">
+            {audit.result.images} images and {audit.result.sounds} sounds
+            checked · {audit.result.issueCount} issues
+          </p>
+          {audit.result.issues.length > 0 && (
+            <ul>
+              {audit.result.issues.map((message, index) => (
+                <li key={index}>{message}</li>
+              ))}
+            </ul>
+          )}
+          {audit.result.issueCount > audit.result.issues.length && (
+            <p>Showing the first 100 issues.</p>
+          )}
+        </section>
+      )}
       <div className="asset-grid">
-        {assets.map((item) => (
-          <button
-            key={item.id}
-            className={item.id === selectedAssetId ? "selected" : ""}
-            aria-pressed={item.id === selectedAssetId}
-            onClick={() => useEditor.setState({ selectedAssetId: item.id })}
-          >
-            <img src={item.source} alt="" />
-            <span>{item.name}</span>
-          </button>
-        ))}
+        {assets
+          .slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+          .map((item) => (
+            <button
+              key={item.id}
+              className={item.id === selectedAssetId ? "selected" : ""}
+              aria-pressed={item.id === selectedAssetId}
+              onClick={() => useEditor.setState({ selectedAssetId: item.id })}
+            >
+              <img src={item.source} alt="" loading="lazy" decoding="async" />
+              <span>{item.name}</span>
+            </button>
+          ))}
       </div>
+      {assets.length > pageSize && (
+        <div className="inline-actions">
+          <button
+            onClick={() => setPage(currentPage - 1)}
+            disabled={currentPage === 0}
+          >
+            Previous images
+          </button>
+          <button
+            onClick={() => setPage(currentPage + 1)}
+            disabled={(currentPage + 1) * pageSize >= assets.length}
+          >
+            Next images
+          </button>
+        </div>
+      )}
       {asset && (
         <section className="asset-details" aria-label="Asset preview">
           <strong>{asset.name}</strong>
@@ -259,6 +323,7 @@ export function HierarchyPanel() {
   const scene = useEditor(selectedScene);
   const entityId = useEditor((state) => state.entityId);
   const [collapsed, setCollapsed] = useState(new Set<string>());
+  const [page, setPage] = useState(0);
   const rows = useMemo(() => {
     const children = new Map<string | null, Entity[]>();
     for (const item of scene.entities) {
@@ -279,7 +344,12 @@ export function HierarchyPanel() {
           pending.push({ entity: sub[i], depth: row.depth + 1 });
     }
     return ordered;
-  }, [scene, collapsed]);
+  }, [scene.entities, collapsed]);
+  const pageSize = 200;
+  const currentPage = Math.min(
+    page,
+    Math.max(0, Math.ceil(rows.length / pageSize) - 1),
+  );
   return (
     <div className="hierarchy panel-body">
       <div className="inline-actions">
@@ -297,44 +367,68 @@ export function HierarchyPanel() {
         <Layers3 size={15} />
         {scene.name}
       </button>
-      {rows.map((row) => (
-        <div
-          key={row.entity.id}
-          className={`hierarchy-row ${row.entity.id === entityId ? "selected" : ""}`}
-          style={{ paddingLeft: Math.min(9, row.depth) * 13 }}
-        >
-          {row.children ? (
-            <button
-              className="tree-chevron"
-              aria-label={
-                collapsed.has(row.entity.id)
-                  ? "Expand children"
-                  : "Collapse children"
-              }
-              onClick={() =>
-                setCollapsed((old) => {
-                  const next = new Set(old);
-                  if (next.has(row.entity.id)) next.delete(row.entity.id);
-                  else next.add(row.entity.id);
-                  return next;
-                })
-              }
-            >
-              {collapsed.has(row.entity.id) ? (
-                <ChevronRight size={14} />
-              ) : (
-                <ChevronDown size={14} />
-              )}
-            </button>
-          ) : (
-            <span className="tree-chevron" />
-          )}
-          <button className="tree-row" onClick={() => chooseEntity(row.entity)}>
-            <Box size={15} />
-            <span>{row.entity.name}</span>
+      {rows.length > pageSize && (
+        <div className="inline-actions">
+          <button
+            disabled={currentPage === 0}
+            onClick={() => setPage(currentPage - 1)}
+          >
+            Previous entities
+          </button>
+          <span>
+            {currentPage + 1} / {Math.ceil(rows.length / pageSize)}
+          </span>
+          <button
+            disabled={(currentPage + 1) * pageSize >= rows.length}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            Next entities
           </button>
         </div>
-      ))}
+      )}
+      {rows
+        .slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+        .map((row) => (
+          <div
+            key={row.entity.id}
+            className={`hierarchy-row ${row.entity.id === entityId ? "selected" : ""}`}
+            style={{ paddingLeft: Math.min(9, row.depth) * 13 }}
+          >
+            {row.children ? (
+              <button
+                className="tree-chevron"
+                aria-label={
+                  collapsed.has(row.entity.id)
+                    ? "Expand children"
+                    : "Collapse children"
+                }
+                onClick={() =>
+                  setCollapsed((old) => {
+                    const next = new Set(old);
+                    if (next.has(row.entity.id)) next.delete(row.entity.id);
+                    else next.add(row.entity.id);
+                    return next;
+                  })
+                }
+              >
+                {collapsed.has(row.entity.id) ? (
+                  <ChevronRight size={14} />
+                ) : (
+                  <ChevronDown size={14} />
+                )}
+              </button>
+            ) : (
+              <span className="tree-chevron" />
+            )}
+            <button
+              className="tree-row"
+              onClick={() => chooseEntity(row.entity)}
+            >
+              <Box size={15} />
+              <span>{row.entity.name}</span>
+            </button>
+          </div>
+        ))}
     </div>
   );
 }

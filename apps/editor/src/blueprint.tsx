@@ -58,6 +58,7 @@ import {
   type Block,
   type Blueprint,
   type Expression,
+  type ExtensionFunction,
   type Property,
   type ValueType,
 } from "@mosaic/blueprints";
@@ -591,6 +592,39 @@ function ExpressionControl({
 }: ExprProps) {
   const [editing, setEditing] = useState(false);
   const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
+  const extensions = useEditor((state) => state.project.extensions);
+  const extensionOptions = useMemo(
+    () =>
+      extensions?.flatMap(({ id, name, functions }) =>
+        functions.map((fn) => ({
+          extensionId: id,
+          label: name + " / " + fn.name,
+          fn,
+        })),
+      ) ?? [],
+    [extensions],
+  );
+  const activeExtension =
+    expr.kind === "extension"
+      ? extensionOptions.find(
+          ({ extensionId, fn }) =>
+            extensionId === expr.extensionId && fn.id === expr.functionId,
+        )
+      : undefined;
+  const availableExtensions = extensionOptions.filter(
+    ({ fn }) => !expected || fn.result === expected,
+  );
+  function pickExtension(extensionId: string, fn: ExtensionFunction) {
+    change({
+      kind: "extension",
+      extensionId,
+      functionId: fn.id,
+      args: Object.fromEntries(
+        fn.parameters.map(({ id, type }) => [id, literal(defaultValue[type])]),
+      ),
+    });
+  }
+
   const summary = (expression: Expression): ReactNode => {
     switch (expression.kind) {
       case "literal":
@@ -633,6 +667,27 @@ function ExpressionControl({
         return <span>{expression.query}</span>;
       case "toText":
         return <span>Text({summary(expression.value)})</span>;
+      case "extension": {
+        const match = extensionOptions.find(
+          ({ extensionId, fn }) =>
+            extensionId === expression.extensionId &&
+            fn.id === expression.functionId,
+        );
+        return (
+          <span>
+            {match?.fn.name ?? "Missing extension function"}(
+            {match?.fn.parameters.map(({ id }, index) => (
+              <span key={id}>
+                {index > 0 && ", "}
+                {Object.hasOwn(expression.args, id)
+                  ? summary(expression.args[id])
+                  : "…"}
+              </span>
+            ))}
+            )
+          </span>
+        );
+      }
       case "data": {
         const entry = dataEntries(catalog, expression.source).find(
           ({ id }) => id === expression.id,
@@ -722,6 +777,11 @@ function ExpressionControl({
           value: literal(expected === "boolean" ? false : 0),
         });
         break;
+      case "extension": {
+        const first = availableExtensions[0];
+        if (first) pickExtension(first.extensionId, first.fn);
+        break;
+      }
       case "data": {
         const source =
           expected === "record" && catalog.sheets.length
@@ -819,6 +879,10 @@ function ExpressionControl({
               <option value="component">Vector component</option>
               <option value="field">Record field</option>
               <option value="data">Project data</option>
+              {(availableExtensions.length > 0 ||
+                expr.kind === "extension") && (
+                <option value="extension">Extension function</option>
+              )}
             </select>
           </Field>
           <ExpressionEntry
@@ -827,6 +891,61 @@ function ExpressionControl({
             axes={axes}
             change={change}
           />
+          {expr.kind === "extension" && (
+            <>
+              <Field label="Function">
+                <select
+                  aria-label={label + " extension function"}
+                  value={
+                    activeExtension
+                      ? activeExtension.extensionId +
+                        "/" +
+                        activeExtension.fn.id
+                      : ""
+                  }
+                  onChange={(event) => {
+                    const choice = extensionOptions.find(
+                      ({ extensionId, fn }) =>
+                        extensionId + "/" + fn.id === event.target.value,
+                    );
+                    if (choice) pickExtension(choice.extensionId, choice.fn);
+                  }}
+                >
+                  {!activeExtension && (
+                    <option value="">Choose an extension function</option>
+                  )}
+                  {extensionOptions
+                    .filter(
+                      (option) =>
+                        option === activeExtension ||
+                        !expected ||
+                        option.fn.result === expected,
+                    )
+                    .map(({ extensionId, fn, label }) => (
+                      <option
+                        key={extensionId + "/" + fn.id}
+                        value={extensionId + "/" + fn.id}
+                      >
+                        {label}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+              {activeExtension?.fn.parameters.map(({ id, type }) => (
+                <div key={id}>
+                  {nested(
+                    id,
+                    Object.hasOwn(expr.args, id)
+                      ? expr.args[id]
+                      : literal(defaultValue[type]),
+                    (value) =>
+                      change({ ...expr, args: { ...expr.args, [id]: value } }),
+                    type,
+                  )}
+                </div>
+              ))}
+            </>
+          )}
           {expr.kind === "literal" && (
             <>
               <Field label="Type">
@@ -2397,6 +2516,7 @@ export function BlueprintWorkspace() {
   const blueprint = useEditor(selectedBlueprint);
   const axes = useEditor((state) => state.project.input);
   const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
+  const extensions = useEditor((state) => state.project.extensions);
   const signals = useEditor((state) => state.project.signals ?? emptySignals);
   const eventId = useEditor((state) => state.eventId);
   const [scale, setScale] = useState(100);
@@ -2408,8 +2528,9 @@ export function BlueprintWorkspace() {
         new Set(axes.map((axis) => axis.id)),
         signals,
         indexCatalog(catalog),
+        extensions,
       ),
-    [axes, blueprint, signals, catalog],
+    [axes, blueprint, signals, catalog, extensions],
   );
   const diagnostics = compiled?.diagnostics ?? [];
   const problems = new Map<string, string[]>();
@@ -2562,6 +2683,7 @@ export function BlueprintInspector() {
   const tile = useEditor((state) => state.selectedTile);
   const axes = useEditor((state) => state.project.input);
   const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
+  const extensions = useEditor((state) => state.project.extensions);
   const signals = useEditor((state) => state.project.signals ?? emptySignals);
   if (!blueprint)
     return (
@@ -2579,6 +2701,7 @@ export function BlueprintInspector() {
     new Set(axes.map((axis) => axis.id)),
     signals,
     indexCatalog(catalog),
+    extensions,
   ).diagnostics;
   return (
     <div className="panel-body inspector">

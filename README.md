@@ -21,9 +21,9 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 - **Animator**, **Timeline**, **Particles**, and **Audio** provide dedicated authoring and preview workspaces for gameplay effects.
 - **Data** opens tools for typed sheets, enums, structs, resources, globals, saves, and localization.
 - **UI** designs responsive game interfaces with a docked hierarchy and inspector. **Input** binds keyboard axes.
-- Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector.
+- Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector. **Validate project assets** checks image decoding and dimensions, sprite and animation frame bounds, terrain atlases, UI references, and embedded WAV files.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
-- **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring.
+- **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring. Authoring changes apply between simulation frames. Unchanged authored fields retain their live values, and explicitly edited fields take on the new authored values. Adding an entity with a Blueprint runs its On Start handler.
 
 Open **File → Open Lantern Ridge Sample** for a self-contained example. Move the lantern keeper with A/D or the arrow keys. The project demonstrates camera follow, a spritesheet with idle and walking clips, and a screen-space HUD. The Lookout Lamp demonstrates a timed loop, a typed scene event, and a reusable function. Sample art is original to this repository and covered by the LICENSE.
 
@@ -37,7 +37,7 @@ Open **File → Open Lantern Ridge Sample** for a self-contained example. Move t
 
 ## Author a world
 
-- **Tilemap** paints solid colors or terrain on independent layers mapped to scene render layers. Terrain can connect with generated edges or a 16-frame atlas. Atlas frames are ordered by the sum of the matching neighbor flags: north 1, east 2, south 4, west 8. Layer controls set visibility, opacity, collision participation, and traversal cost. Tile data is indexed in 16 × 16 cell chunks at runtime.
+- **Tilemap** paints solid colors or terrain on independent layers mapped to scene render layers. Terrain can connect with generated edges or a 16-frame atlas. Atlas frames are ordered by the sum of the matching neighbor flags, with 1 for north, 2 for east, 4 for south, and 8 for west. Layer controls set visibility, opacity, collision participation, and traversal cost. Tile data is indexed on demand in 16 × 16 cell chunks, with up to 32 resident indexes per tile layer.
 - **Physics** sets scene gravity and world-aligned box bodies on root entities. Static bodies anchor obstacles, kinematic bodies move under Blueprint commands or assigned velocity, and dynamic bodies also respond to gravity and bounce. Sensor boxes report contact without blocking motion. Attach an entity-typed or payload-free scene event to receive contact enter and exit in the body’s Blueprint. Tile contacts use an empty entity reference.
 - **Cameras** edits the scene camera’s center, zoom, follow target and offsets, damping, dead zone, and world bounds. **Preview Game Camera** shows what the exported game will frame.
 - **Navigation** previews weighted, four-direction grid paths through tile collisions and static bodies. Add an agent to a root entity and pick a destination cell in the viewport or follow another entity’s cell. Agents follow cell centers. Physical bodies continue to interact with moving obstacles while following their route.
@@ -74,13 +74,42 @@ Choose **Ridge Trading Post** from the sample’s scene list. Press Space to buy
 
 Choose **Lantern Watch** in the sample project. Open **Controls** to try the bound signal meter, night patrol toggle, call sign field, and language buttons. In the menu, use the arrow keys to move between **Deploy Beacon** and **Controls**.
 
+## Profile a running scene
+
+Open **Window → Profiler** or select the Profiler tab beside Debug. Play the scene with **Game Preview** open. The panel samples frame intervals, simulation CPU time, draw-list generation, and renderer submission. It shows the latest values, 95th percentiles, draw commands, spatial candidates, resident tile chunks, decoded texture usage, and live reload timing. **Download capture** saves the latest 180 samples and counters as JSON. Use **Clear capture** before reproducing a slow interaction.
+
+World sprites and rectangles use a spatial grid to select camera-visible draws. Each render surface decodes visible textures on demand with up to four concurrent decodes, 96 resident images, and a 256 MiB decoded-pixel budget. Decoded images can be evicted as the camera moves. The asset audit checks embedded images and sounds across the whole project, including unused assets.
+
+## Extend Blueprint expressions
+
+Open **Window → Extensions** and import a JSON manifest like this one.
+
+```json
+{
+  "version": 1,
+  "id": "ridge.math",
+  "name": "Ridge Math",
+  "functions": [
+    {
+      "id": "double",
+      "name": "Double",
+      "parameters": [{ "id": "amount", "type": "number" }],
+      "result": "number",
+      "body": "amount * 2"
+    }
+  ]
+}
+```
+
+Choose **Extension function** in a Blueprint expression and connect typed argument expressions. A manifest defines scalar functions over their parameters using the Blueprint expression parser's arithmetic, comparison, Boolean, string, and numeric operators. Supported types are `number`, `boolean`, and `string`. Function bodies have no access to the scene, input, or project data. Projects store the declarations and references by ID, so the same functions run in preview and offline exports. Re-import a manifest with the same ID to update it.
+
 ## Rendering and export
 
 The same runtime feeds the PixiJS accelerated backend and the independent Canvas 2D renderer. **Auto Renderer** tries acceleration and switches to Canvas 2D if initialization fails or the rendering context is lost. Choose a backend explicitly from the toolbar. Canvas 2D is the compatibility API and can use hardware acceleration depending on the browser.
 
-**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images and WAV sounds, the project data catalog, and the authored game interfaces. Open that file in a browser to play. The export runs without React or Electron.
+**Export** writes one offline HTML file with the starting scene, runtime code, embedded images and WAV sounds, the project data catalog, and the authored game interfaces. Open that file in a browser to play. The export runs without React or Electron.
 
-A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds images and sounds and preserves entity IDs, hierarchy, scene settings, input axes, Animator definitions, effects, authored data and Blueprint data. Gameplay save files are separate from project files.
+A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds images and sounds and preserves entity IDs, hierarchy, scene settings, input axes, Animator definitions, effects, authored data, Blueprints, and extension declarations. Gameplay save files are separate from project files.
 
 ## Development and verification
 
@@ -100,11 +129,13 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
-npm run package
+npm run release:package
 npx playwright install chromium
 npm run smoke
 ```
 
-The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, `dist/ridge-trading-post.html`, and `dist/lantern-watch.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the offline samples as run artifacts.
+The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, `dist/ridge-trading-post.html`, and `dist/lantern-watch.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Run `npm run release:archive` after packaging to create a `tar.gz`, SHA-256 checksum, and JSON manifest in `dist/`. The release archives are for development and testing. Public installers and macOS notarization require distribution credentials.
+
+Browser and packaged desktop smoke tests require a graphical session. On Linux, use `xvfb-run --auto-servernum npm run smoke`. CI runs the browser suite, including PixiJS and Canvas 2D parity, and launches the packaged editor on Linux x64, Windows x64, and macOS arm64. Each native job checks project creation, asset import, save and reopen, and offline HTML export. Download the native archives, checksums, manifests, and sample HTML files from a successful run. [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml)
 
 MIT licensed.

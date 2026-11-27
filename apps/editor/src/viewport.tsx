@@ -1,3 +1,4 @@
+import { profileFrame } from "./profiler";
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
   Crosshair,
@@ -35,15 +36,25 @@ export function RenderSurface({
   assets,
   getFrame,
   surface,
+  profile = false,
   label,
 }: {
   assets: Project["assets"];
   getFrame: () => RenderFrame;
   surface?: React.RefObject<HTMLDivElement | null>;
   label: string;
+  profile?: boolean;
 }) {
   const mount = useRef<HTMLDivElement>(null);
   const current = useRef(getFrame);
+  const currentAssets = useRef(assets);
+  const activeRenderer = useRef<Awaited<
+    ReturnType<typeof createRenderer>
+  > | null>(null);
+  useEffect(() => {
+    currentAssets.current = assets;
+    activeRenderer.current?.updateAssets?.(assets);
+  }, [assets]);
   useEffect(() => {
     current.current = getFrame;
   }, [getFrame]);
@@ -55,14 +66,16 @@ export function RenderSurface({
     instance.className = "render-instance";
     let running = true;
     let frameId = 0;
+    let name = "";
     const report = (message: string) => {
       if (running) useEditor.getState().report(message, "error");
     };
     void createRenderer(
-      { parent: instance, assets, report },
+      { parent: instance, assets: currentAssets.current, report },
       preference,
       (value) => {
-        if (running) setBackend(value === "pixi" ? "PixiJS" : "Canvas 2D");
+        name = value === "pixi" ? "PixiJS" : "Canvas 2D";
+        if (running) setBackend(name);
       },
     )
       .then((renderer) => {
@@ -70,6 +83,8 @@ export function RenderSurface({
           renderer.dispose();
           return;
         }
+        renderer.updateAssets?.(currentAssets.current);
+        activeRenderer.current = renderer;
         root.replaceChildren(instance);
         let width = 0;
         let height = 0;
@@ -86,7 +101,25 @@ export function RenderSurface({
               height = h;
               renderer.resize(width, height);
             }
-            renderer.render(current.current());
+            const game =
+              profile && useEditor.getState().transport === "playing"
+                ? playGame()
+                : undefined;
+            if (game) {
+              const start = performance.now();
+              const commands = current.current();
+              const built = performance.now();
+              renderer.render(commands);
+              profileFrame(
+                start,
+                built,
+                performance.now(),
+                renderer,
+                name,
+                commands.draws.length,
+                game,
+              );
+            } else renderer.render(current.current());
             frameId = requestAnimationFrame(draw);
           } catch (error) {
             report(String(error));
@@ -106,9 +139,10 @@ export function RenderSurface({
       running = false;
       cancelAnimationFrame(frameId);
       cleanup?.();
+      activeRenderer.current = null;
       instance.remove();
     };
-  }, [assets, preference]);
+  }, [preference, profile]);
   return (
     <div className="render-surface" aria-label={label} ref={surface}>
       <div className="render-mount" ref={mount} />
@@ -137,13 +171,24 @@ function GameUiPreview({
     mode.current = transport;
   }, [transport]);
   useEffect(() => {
-    let current: Game | undefined;
+    let current: Game["ui"] | undefined;
+    let sources: Project["assets"] | undefined;
+    let width = 0,
+      height = 0;
     let overlay: ReturnType<typeof mountGameUi> | undefined;
     let frame = 0;
     const tick = () => {
       const game = mode.current === "editing" ? author : (playGame() ?? author);
-      if (current !== game) {
-        current = game;
+      if (
+        current !== game.ui ||
+        sources !== game.project.assets ||
+        width !== game.project.width ||
+        height !== game.project.height
+      ) {
+        current = game.ui;
+        sources = game.project.assets;
+        width = game.project.width;
+        height = game.project.height;
         overlay?.destroy();
         overlay = game.ui.document.widgets.length
           ? mountGameUi(host.current!, game.ui, {
@@ -167,15 +212,29 @@ function GameUiPreview({
   return <div className="ui-live-preview" ref={host} />;
 }
 
+// The editor and game preview share the current authored scene. Live play owns a
+// separate Game, and history snapshots do not retain their compiled preview.
+let authored: { project: Project; sceneId: string; game: Game } | undefined;
+function authoringGame(project: Project, sceneId: string) {
+  if (authored?.project === project && authored.sceneId === sceneId)
+    return authored.game;
+  const game =
+    authored?.sceneId === sceneId && authored.game.reloadProject(project)
+      ? authored.game
+      : new Game(project, sceneId);
+  authored = { project, sceneId, game };
+  return game;
+}
+
 export function GamePreview() {
   const project = useEditor((state) => state.project);
   const scene = useEditor(selectedScene);
   const playing = useEditor((state) => state.transport);
   const view = useRef<HTMLDivElement>(null);
-  const author = useMemo(
-    () => new Game(project, scene.id),
-    [project, scene.id],
-  );
+  const { author, authorFrame } = useMemo(() => {
+    const game = authoringGame(project, scene.id);
+    return { author: game, authorFrame: game.frame() };
+  }, [project, scene.id]);
   useEffect(() => {
     if (playing !== "playing") {
       playGame()?.input.clear();
@@ -215,8 +274,9 @@ export function GamePreview() {
       >
         <RenderSurface
           label="Game preview"
+          profile
           assets={project.assets}
-          getFrame={() => playGame()?.frame() ?? author.frame()}
+          getFrame={() => playGame()?.frame() ?? authorFrame}
         />
         <GameUiPreview author={author} transport={playing} />
       </div>
@@ -242,8 +302,7 @@ type Drag = {
 };
 const findDraw = (frame: RenderFrame, id: string | null) =>
   frame.draws.find((draw) => draw.entityId === id);
-function viewCamera(scene: Scene) {
-  const { x, y, zoom } = scene.camera;
+function viewCamera({ x, y, zoom }: Scene["camera"]) {
   return { x, y, zoom };
 }
 
@@ -298,16 +357,17 @@ function SceneViewportContent({
   const [elapsedDrag, setElapsedDrag] = useState<{
     x: number;
     y: number;
+    entityId: string;
   } | null>(null);
   const drag = useRef<Drag | null>(null);
   const strokes = useRef(new Map<number, Tile>());
   const surface = useRef<HTMLDivElement>(null);
-  const author = useMemo(
-    () => new Game(project, scene.id),
-    [project, scene.id],
-  );
-  const camera = orientation ?? (framing ? author.view() : viewCamera(scene));
-  const frame = useMemo(() => author.frame(camera), [author, camera]);
+  const { author, camera, frame } = useMemo(() => {
+    const game = authoringGame(project, scene.id);
+    const view =
+      orientation ?? (framing ? game.view() : viewCamera(scene.camera));
+    return { author: game, camera: view, frame: game.frame(view) };
+  }, [project, scene.id, scene.camera, orientation, framing]);
   const selected = findDraw(frame, entityId);
   const fit = fitFrame(
     project.width,
@@ -447,7 +507,7 @@ function SceneViewportContent({
     if (!start || start.pointer !== event.pointerId) return;
     const x = (event.clientX - start.x) / fit.scale;
     const y = (event.clientY - start.y) / fit.scale;
-    if (start.entityId) setElapsedDrag({ x, y });
+    if (start.entityId) setElapsedDrag({ x, y, entityId: start.entityId });
     else
       setOrientation({
         ...start.camera,
@@ -514,35 +574,28 @@ function SceneViewportContent({
       zoom: Math.max(0.05, Math.min(8, camera.zoom * factor)),
     });
   }
-  const draw = () => {
-    const current = {
-      ...frame,
-      draws: frame.draws.map((draw) =>
-        draw.entityId && draw.entityId === drag.current?.entityId && elapsedDrag
-          ? {
-              ...draw,
-              matrix: {
-                ...draw.matrix,
-                x: draw.matrix.x + elapsedDrag.x,
-                y: draw.matrix.y + elapsedDrag.y,
-              },
-            }
-          : draw,
-      ),
-    };
-    return current;
-  };
-  const activeDraw =
-    selected?.entityId === drag.current?.entityId && elapsedDrag && selected
-      ? {
-          ...selected,
-          matrix: {
-            ...selected.matrix,
-            x: selected.matrix.x + elapsedDrag.x,
-            y: selected.matrix.y + elapsedDrag.y,
-          },
-        }
-      : selected;
+  const drawn = useMemo(
+    () =>
+      elapsedDrag
+        ? {
+            ...frame,
+            draws: frame.draws.map((draw) =>
+              draw.entityId === elapsedDrag.entityId
+                ? {
+                    ...draw,
+                    matrix: {
+                      ...draw.matrix,
+                      x: draw.matrix.x + elapsedDrag.x,
+                      y: draw.matrix.y + elapsedDrag.y,
+                    },
+                  }
+                : draw,
+            ),
+          }
+        : frame,
+    [frame, elapsedDrag],
+  );
+  const activeDraw = elapsedDrag ? findDraw(drawn, entityId) : selected;
   const gridSize = scene.tilemap.size * camera.zoom;
   return (
     <div className="workspace scene-workspace">
@@ -637,7 +690,7 @@ function SceneViewportContent({
       >
         <RenderSurface
           assets={project.assets}
-          getFrame={draw}
+          getFrame={() => drawn}
           surface={surface}
           label={worldTool ? worldTool + " viewport" : "Scene viewport"}
         />

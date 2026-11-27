@@ -3,14 +3,22 @@ import type { Frame, Scene, Terrain, Tile, TileLayer } from "@mosaic/model";
 export type Point = { x: number; y: number };
 export type Rect = Point & { width: number; height: number };
 export const TILE_CHUNK_SIZE = 16;
+export const RESIDENT_TILE_CHUNKS = 32;
 export const NORTH = 1,
   EAST = 2,
   SOUTH = 4,
   WEST = 8;
 
 export class TileGrid {
-  private chunks = new Map<number, Map<number, Tile>>();
+  private chunks = new Map<number, Tile[]>();
+  private loaded = new Map<number, Map<number, Tile>>();
+  private lastKey = -1;
+  private lastChunk?: Map<number, Tile>;
+  get residentChunks() {
+    return this.loaded.size;
+  }
   private stride: number;
+  private masks = new WeakMap<Tile, number>();
   constructor(
     readonly width: number,
     readonly height: number,
@@ -22,10 +30,10 @@ export class TileGrid {
       const key = this.chunkKey(tile.x, tile.y);
       let chunk = this.chunks.get(key);
       if (!chunk) {
-        chunk = new Map();
+        chunk = [];
         this.chunks.set(key, chunk);
       }
-      chunk.set(tile.y * width + tile.x, tile);
+      chunk.push(tile);
     }
   }
   private chunkKey(x: number, y: number) {
@@ -34,9 +42,32 @@ export class TileGrid {
       Math.floor(x / TILE_CHUNK_SIZE)
     );
   }
+  private load(key: number) {
+    if (key === this.lastKey) return this.lastChunk;
+    this.lastKey = key;
+    this.lastChunk = undefined;
+    const cached = this.loaded.get(key);
+    if (cached) {
+      this.loaded.delete(key);
+      this.loaded.set(key, cached);
+      this.lastChunk = cached;
+      return cached;
+    }
+    const source = this.chunks.get(key);
+    if (!source) return undefined;
+    const indexed = new Map(
+      source.map((tile) => [tile.y * this.width + tile.x, tile]),
+    );
+    const oldest = this.loaded.keys().next();
+    if (this.loaded.size >= RESIDENT_TILE_CHUNKS && !oldest.done)
+      this.loaded.delete(oldest.value);
+    this.loaded.set(key, indexed);
+    this.lastChunk = indexed;
+    return indexed;
+  }
   at(x: number, y: number) {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return undefined;
-    return this.chunks.get(this.chunkKey(x, y))?.get(y * this.width + x);
+    return this.load(this.chunkKey(x, y))?.get(y * this.width + x);
   }
   forArea(rect: Rect, use: (tile: Tile) => void) {
     if (!this.chunks.size) return;
@@ -56,7 +87,7 @@ export class TileGrid {
     const n = TILE_CHUNK_SIZE;
     for (let cy = Math.floor(top / n); cy <= Math.floor(bottom / n); cy++) {
       for (let cx = Math.floor(left / n); cx <= Math.floor(right / n); cx++) {
-        const chunk = this.chunks.get(cy * this.stride + cx);
+        const chunk = this.load(cy * this.stride + cx);
         if (!chunk) continue;
         for (const tile of chunk.values()) {
           if (
@@ -73,12 +104,15 @@ export class TileGrid {
   mask(tile: Tile) {
     const { x, y, terrainId } = tile;
     if (!terrainId) return 0;
-    return (
+    const saved = this.masks.get(tile);
+    if (saved !== undefined) return saved;
+    const mask =
       (this.at(x, y - 1)?.terrainId === terrainId ? NORTH : 0) |
       (this.at(x + 1, y)?.terrainId === terrainId ? EAST : 0) |
       (this.at(x, y + 1)?.terrainId === terrainId ? SOUTH : 0) |
-      (this.at(x - 1, y)?.terrainId === terrainId ? WEST : 0)
-    );
+      (this.at(x - 1, y)?.terrainId === terrainId ? WEST : 0);
+    this.masks.set(tile, mask);
+    return mask;
   }
 }
 

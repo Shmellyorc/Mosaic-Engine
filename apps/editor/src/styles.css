@@ -1920,3 +1920,37 @@ button.tree-row {
   display: grid;
   gap: 4px;
 }
+
+.profiler-trace {
+  display: flex;
+  gap: 2px;
+  align-items: end;
+  height: 52px;
+  margin: 8px 0;
+  padding: 3px;
+  background: #121421;
+  border-radius: 4px;
+}
+.profiler-trace span {
+  flex: 1;
+  min-width: 1px;
+  background: #a874ef;
+  border-radius: 2px 2px 0 0;
+}
+.profiler-timings {
+  width: 100%;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.55;
+}
+.profiler-timings tbody th {
+  font-weight: normal;
+}
+.profiler-counters {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 12px;
+}
+.profiler-counters dd {
+  margin: 0;
+}

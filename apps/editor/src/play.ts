@@ -1,5 +1,6 @@
 import { AudioMixer, browserSlotStorage, Game } from "@mosaic/runtime";
-import { emptySignals, type Project } from "@mosaic/model";
+import type { Project } from "@mosaic/model";
+import { profileReload, profileSimulation, resetProfile } from "./profiler";
 import { selectedScene, useEditor } from "./state";
 
 let game: Game | undefined;
@@ -107,23 +108,30 @@ export function startTransport() {
       if (!game || runId !== state.runId) {
         runId = state.runId;
         document = state.project;
+        resetProfile();
         game = new Game(state.project, selectedScene(state).id, true, slots);
         updateBreakpoints(game, state.breakpoints);
         game.start();
         debugAt = 0;
       } else {
-        if (
-          state.project.blueprints !== document?.blueprints ||
-          state.project.signals !== document?.signals
-        ) {
-          game.reloadBlueprints(
-            state.project.blueprints,
-            state.project.signals ?? emptySignals,
-          );
-          document = state.project;
-          debugAt = 0;
+        if (state.project !== document) {
+          const started = performance.now();
+          if (game.reloadProject(state.project)) {
+            profileReload(performance.now() - started);
+            if (state.project.mixer !== document?.mixer)
+              audio.configure(state.project.mixer);
+            document = state.project;
+            debugAt = 0;
+          } else {
+            useEditor.getState().stop();
+            useEditor.getState().report("The running scene was removed.");
+          }
         }
-        if (state.transport === "playing") game.advance((now - last) / 1000);
+        if (useEditor.getState().transport === "playing") {
+          const started = performance.now();
+          game.advance((now - last) / 1000);
+          profileSimulation(performance.now() - started);
+        }
       }
       showPause(game);
       if (

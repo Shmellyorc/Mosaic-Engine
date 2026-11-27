@@ -1,6 +1,7 @@
 import type { Asset, Frame } from "@mosaic/model";
 import { fitFrame, type RenderFrame } from "@mosaic/runtime";
 import { createLightmap } from "./lightmap";
+import { imageStream, type ImageMetrics } from "./cache";
 
 export type Backend = "canvas" | "pixi";
 export type Preference = Backend | "auto";
@@ -8,6 +9,8 @@ export type Renderer = {
   readonly backend: Backend;
   resize(width: number, height: number): void;
   render(frame: RenderFrame): void;
+  updateAssets?(assets: Asset[]): void;
+  metrics?(): ImageMetrics;
   dispose(): void;
 };
 export type RendererOptions = {
@@ -20,43 +23,6 @@ type PixiFactory = (
   lost: () => void,
 ) => Promise<Renderer>;
 
-export function assetImages(
-  assets: Asset[],
-  report: RendererOptions["report"],
-) {
-  const images = new Map<string, HTMLImageElement>();
-  const pending = new Map<string, HTMLImageElement>();
-  let disposed = false;
-  for (const asset of assets) {
-    const image = new Image();
-    pending.set(asset.id, image);
-    image.onload = () => {
-      if (disposed) return;
-      pending.delete(asset.id);
-      if (image.naturalWidth > 8192 || image.naturalHeight > 8192)
-        report(`"${asset.name}" exceeds the 8192 pixel texture limit.`);
-      else images.set(asset.id, image);
-    };
-    image.onerror = () => {
-      pending.delete(asset.id);
-      if (!disposed) report(`Could not decode "${asset.name}".`);
-    };
-    image.src = asset.source;
-  }
-  return {
-    images,
-    dispose() {
-      disposed = true;
-      for (const image of pending.values()) {
-        image.onload = null;
-        image.onerror = null;
-        image.removeAttribute("src");
-      }
-      pending.clear();
-      images.clear();
-    },
-  };
-}
 export function insideImage(frame: Frame, image: HTMLImageElement) {
   return (
     frame.x + frame.w <= image.naturalWidth &&
@@ -78,16 +44,19 @@ export function createCanvas(options: RendererOptions): Renderer {
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("Canvas 2D is unavailable.");
   options.parent.replaceChildren(canvas);
-  const resources = assetImages(options.assets, options.report);
+  const resources = imageStream(options.assets, options.report);
   const badFrame = reportFrames(options.report);
   let lightmap: ReturnType<typeof createLightmap> | undefined;
   return {
     backend: "canvas",
+    updateAssets: resources.replace,
+    metrics: resources.metrics,
     resize(width, height) {
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
     },
     render(frame) {
+      resources.prepare(frame.draws);
       const view = fitFrame(
         frame.width,
         frame.height,
@@ -138,7 +107,7 @@ export function createCanvas(options: RendererOptions): Renderer {
           ctx.fillStyle = draw.color;
           ctx.fillText(draw.text, 0, 0);
         } else if (draw.kind === "sprite") {
-          const image = resources.images.get(draw.assetId);
+          const image = resources.get(draw.assetId);
           if (image && (!draw.frame || insideImage(draw.frame, image))) {
             if (draw.frame) {
               const { x, y, w, h } = draw.frame;
@@ -232,6 +201,18 @@ export function rendererFactories(pixi: PixiFactory, canvas = createCanvas) {
           );
         }
       },
+      updateAssets(assets) {
+        options.assets = assets;
+        current.updateAssets?.(assets);
+      },
+      metrics: () =>
+        current.metrics?.() ?? {
+          resident: 0,
+          decoding: 0,
+          requested: 0,
+          bytes: 0,
+          evicted: 0,
+        },
       dispose() {
         closed = true;
         last = undefined;
