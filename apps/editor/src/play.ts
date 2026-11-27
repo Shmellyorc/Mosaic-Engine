@@ -5,11 +5,42 @@ let game: Game | undefined;
 export function playGame() {
   return game;
 }
+
+function publishSnapshot(game: Game, entityId: string | null) {
+  const entity = entityId ? game.getEntity(entityId) : undefined;
+  useEditor.setState({
+    snapshot: {
+      blocks: [...game.activeBlocks],
+      variables: entityId
+        ? [...(game.getVariables(entityId) ?? [])].map(([id, value]) => ({
+            id,
+            value,
+          }))
+        : [],
+      logs: [...game.logs],
+      time: game.time,
+      position: entity
+        ? { x: entity.transform.x, y: entity.transform.y }
+        : undefined,
+    },
+  });
+}
+
 export function startTransport() {
   let runId = -1;
   let last = performance.now();
   let debugAt = 0;
   let previousEntity: string | null = null;
+  useEditor.subscribe((state, previous) => {
+    if (
+      game &&
+      state.transport === "paused" &&
+      previous.transport !== "paused"
+    ) {
+      game.input.clear();
+      publishSnapshot(game, state.entityId);
+    }
+  });
   function tick(now: number) {
     const state = useEditor.getState();
     if (state.transport !== "editing") {
@@ -23,24 +54,7 @@ export function startTransport() {
       if (now >= debugAt || state.entityId !== previousEntity) {
         debugAt = now + 120;
         previousEntity = state.entityId;
-        const entity = state.entityId
-          ? game.getEntity(state.entityId)
-          : undefined;
-        useEditor.setState({
-          snapshot: {
-            blocks: [...game.activeBlocks],
-            variables: state.entityId
-              ? [...(game.getVariables(state.entityId) ?? [])].map(
-                  ([id, value]) => ({ id, value }),
-                )
-              : [],
-            logs: [...game.logs],
-            time: game.time,
-            position: entity
-              ? { x: entity.transform.x, y: entity.transform.y }
-              : undefined,
-          },
-        });
+        publishSnapshot(game, state.entityId);
       }
     } else if (game) {
       const logs = [...game.logs];
