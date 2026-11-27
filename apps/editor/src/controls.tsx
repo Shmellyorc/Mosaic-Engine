@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 export function Section({
   title,
@@ -31,30 +31,36 @@ export function Field({
   );
 }
 
-export function TextField({
-  label,
-  value,
-  onChange,
-  allowEmpty = false,
-  maxLength = 100,
-}: {
+type TextFieldProps = {
   label: string;
   value: string;
   onChange: (value: string) => void;
   allowEmpty?: boolean;
   maxLength?: number;
-}) {
+};
+
+export function TextField(props: TextFieldProps) {
+  return <TextInput key={props.value} {...props} />;
+}
+
+function TextInput({
+  label,
+  value,
+  onChange,
+  allowEmpty = false,
+  maxLength = 100,
+}: TextFieldProps) {
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
   return (
     <input
       aria-label={label}
       value={draft}
       maxLength={maxLength}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        if ((allowEmpty || draft.trim()) && value !== draft)
-          onChange(allowEmpty ? draft : draft.trim());
+      onBlur={(event) => {
+        const text = event.currentTarget.value;
+        if ((allowEmpty || text.trim()) && value !== text)
+          onChange(allowEmpty ? text : text.trim());
         else setDraft(value);
       }}
       onKeyDown={(event) => {
@@ -68,23 +74,28 @@ export function TextField({
   );
 }
 
-export function NumberField({
-  label,
-  value,
-  onChange,
-  min = -1e7,
-  max = 1e7,
-  step = 1,
-}: {
+type NumberFieldProps = {
   label: string;
   value: number;
   onChange: (value: number) => void;
   min?: number;
   max?: number;
   step?: number;
-}) {
+};
+
+export function NumberField(props: NumberFieldProps) {
+  return <NumberInput key={props.value} {...props} />;
+}
+
+function NumberInput({
+  label,
+  value,
+  onChange,
+  min = -1e7,
+  max = 1e7,
+  step = 1,
+}: NumberFieldProps) {
   const [draft, setDraft] = useState(String(Number(value.toFixed(4))));
-  useEffect(() => setDraft(String(Number(value.toFixed(4)))), [value]);
   return (
     <input
       aria-label={label}
@@ -94,9 +105,9 @@ export function NumberField({
       max={max}
       step={step}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        const parsed = Number(draft);
-        if (draft && Number.isFinite(parsed)) {
+      onBlur={(event) => {
+        const parsed = event.currentTarget.valueAsNumber;
+        if (Number.isFinite(parsed)) {
           const limit = Math.max(min, Math.min(max, parsed));
           const next = step === 1 ? Math.round(limit) : limit;
           setDraft(String(next));

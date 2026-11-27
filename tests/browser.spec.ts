@@ -5,11 +5,12 @@ import { pathToFileURL } from "node:url";
 import { parseProject } from "@mosaic/model";
 
 const url = "http://127.0.0.1:5188";
-async function editor(page: Page) {
-  await page.addInitScript(() => {
+async function editor(page: Page, renderer: "canvas" | "auto" = "canvas") {
+  await page.addInitScript((renderer) => {
     Object.defineProperty(window, "showOpenFilePicker", { value: undefined });
     Object.defineProperty(window, "showSaveFilePicker", { value: undefined });
-  });
+    localStorage.setItem("mosaic-renderer", renderer);
+  }, renderer);
   await page.goto(url);
   await expect(
     page.getByRole("heading", { name: "Player Movement" }),
@@ -75,8 +76,11 @@ test("browser authoring covers nested tiles, workspace tabs, undo/redo, and Inde
     .getByRole("button", { name: "Entity", exact: true })
     .first()
     .click();
-  await page.getByLabel("Entity name").fill("Trail Marker");
-  await page.getByLabel("Entity name").press("Enter");
+  const name = page.getByLabel("Entity name");
+  await expect(name).toHaveValue("Entity");
+  await name.fill("Trail Marker");
+  await expect(name).toHaveValue("Trail Marker");
+  await name.press("Enter");
   await page.getByRole("button", { name: "Blueprints", exact: true }).click();
   await expect(added).toBeVisible();
   await expect
@@ -113,7 +117,7 @@ test("browser authoring covers nested tiles, workspace tabs, undo/redo, and Inde
 test("play mode moves the player, pauses, restarts, and renders through either backend", async ({
   page,
 }) => {
-  await editor(page);
+  await editor(page, "auto");
   const renderer = page.getByTestId("preview-backend");
   await expect(renderer).toHaveText("PixiJS");
   const position = page.getByTestId("runtime-position");
