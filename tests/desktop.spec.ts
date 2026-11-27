@@ -128,6 +128,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       .getByRole("button", { name: "Scene", exact: true })
       .click();
     await fileAction("Import Image");
+    await page.getByRole("tab", { name: "Project", exact: true }).click();
     await expect(
       page
         .getByRole("tabpanel", { name: "Project" })
