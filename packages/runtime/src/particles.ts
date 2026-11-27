@@ -71,6 +71,14 @@ export class ParticleWorld {
   get hasEmitters() {
     return this.emitters.size > 0;
   }
+  status(id: string) {
+    const emitter = this.emitters.get(id);
+    if (!emitter) throw new Error("The entity has no particle emitter.");
+    return emitter;
+  }
+  reseed(id: string, seed: number) {
+    this.status(id).random = seed;
+  }
   control(entityId: string, operation: "burst" | "start" | "stop") {
     const emitter = this.emitters.get(entityId);
     if (!emitter) throw new Error("The entity has no particle emitter.");

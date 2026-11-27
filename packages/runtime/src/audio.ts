@@ -13,6 +13,7 @@ export type AudioCommand = {
   soundId: string;
   playing: boolean;
   owner?: string;
+  mix?: { gain: number; muted: boolean };
 };
 const MAX_VOICES = 32;
 const MAX_BUFFER_BYTES = 48 * 1024 * 1024;
@@ -43,6 +44,7 @@ export class AudioMixer {
   private bufferBytes = 0;
   private disposed = false;
   private config?: Mixer;
+  private mixOverrides = new Map<string, NonNullable<AudioCommand["mix"]>>();
   private library?: AudioCreation;
 
   constructor(private report: (message: string) => void) {}
@@ -93,9 +95,10 @@ export class AudioMixer {
 
   private apply() {
     const master = this.master!;
+    const override = this.mixOverrides.get(MASTER_BUS);
     master.gain.value = unit(
-      this.config?.master ?? 1,
-      this.config?.muted ?? false,
+      override?.gain ?? this.config?.master ?? 1,
+      override?.muted ?? this.config?.muted ?? false,
     );
     const ids = new Set(this.config?.buses.map(({ id }) => id));
     for (const [id, node] of this.buses) {
@@ -110,7 +113,11 @@ export class AudioMixer {
         node.connect(master);
         this.buses.set(bus.id, node);
       }
-      node.gain.value = unit(bus.gain, bus.muted);
+      const override = this.mixOverrides.get(bus.id);
+      node.gain.value = unit(
+        override?.gain ?? bus.gain,
+        override?.muted ?? bus.muted,
+      );
     }
     for (const voice of this.voices) {
       const bus = this.sounds.get(voice.id)?.bus ?? MASTER_BUS;
@@ -220,7 +227,18 @@ export class AudioMixer {
     for (const voice of this.voices) this.stop(voice);
   }
 
-  dispatch({ soundId, playing, owner }: AudioCommand, preview = false) {
+  resetRuntimeMix() {
+    if (!this.mixOverrides.size) return;
+    this.mixOverrides.clear();
+    if (this.context) this.apply();
+  }
+
+  dispatch({ soundId, playing, owner, mix }: AudioCommand, preview = false) {
+    if (mix) {
+      this.mixOverrides.set(soundId, mix);
+      if (this.context) this.apply();
+      return;
+    }
     if (!playing) {
       for (const voice of this.voices)
         if (

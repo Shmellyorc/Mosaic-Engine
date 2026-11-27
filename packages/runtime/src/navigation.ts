@@ -189,6 +189,7 @@ export class NavigationWorld {
     goalCell: number;
     path: Point[];
     next: number;
+    arrived?: boolean;
   }[];
   private targets: Map<string, Entity>;
   constructor(
@@ -199,7 +200,7 @@ export class NavigationWorld {
     this.agents = entities
       .filter(
         (entity) =>
-          entity.navigation?.enabled &&
+          entity.navigation &&
           !entity.parentId &&
           entity.body?.kind !== "static",
       )
@@ -209,10 +210,21 @@ export class NavigationWorld {
     this.grid.invalidate();
     for (const agent of this.agents) agent.goalCell = -2;
   }
-  step(seconds: number, physics: PhysicsWorld) {
+  remaining(id: string) {
+    const agent = this.agents.find(({ entity }) => entity.id === id);
+    return agent?.entity.navigation?.enabled
+      ? Math.max(0, agent.path.length - agent.next)
+      : 0;
+  }
+  step(seconds: number, physics: PhysicsWorld, arrived?: (id: string) => void) {
     for (const agent of this.agents) {
       const { entity } = agent;
       const configuration = entity.navigation!;
+      if (!configuration.enabled) {
+        agent.goalCell = -2;
+        agent.arrived = false;
+        continue;
+      }
       const target =
         configuration.target && this.targets.get(configuration.target);
       const goal = target ? entityCenter(target) : configuration;
@@ -222,13 +234,20 @@ export class NavigationWorld {
         agent.goalCell = goalCell;
         agent.path = this.grid.path(from, goal, entity.body);
         agent.next = 0;
+        agent.arrived = false;
       }
       let point = agent.path[agent.next];
       while (point && Math.hypot(point.x - from.x, point.y - from.y) < 0.001) {
         agent.next++;
         point = agent.path[agent.next];
       }
-      if (!point) continue;
+      if (!point) {
+        if (agent.path.length && !agent.arrived) {
+          agent.arrived = true;
+          arrived?.(entity.id);
+        }
+        continue;
+      }
       const length = Math.hypot(point.x - from.x, point.y - from.y);
       const factor = Math.min(1, (configuration.speed * seconds) / length);
       const x = (point.x - from.x) * factor,

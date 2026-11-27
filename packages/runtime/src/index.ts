@@ -1,3 +1,13 @@
+import {
+  assetReference,
+  entityReference,
+  propertyLocation,
+  propertyMember,
+  propertyValue,
+  runtimeColor,
+  runtimeNumber,
+  runtimeRecord,
+} from "./blueprint-properties";
 import { BehaviorRunner } from "./behavior-tree";
 import { SceneWorld, type SceneCommand } from "./scene-flow";
 export type { SceneCommand } from "./scene-flow";
@@ -15,6 +25,7 @@ export {
 } from "./data";
 import {
   compileBlueprint,
+  runtimeEventChannel,
   displayValue,
   typeOf,
   type Blueprint,
@@ -27,6 +38,9 @@ import {
 } from "@mosaic/blueprints";
 import {
   emptySignals,
+  instantiatePrefab,
+  MASTER_BUS,
+  hierarchyIds,
   audioAssets,
   primaryAttachmentId,
   type BlueprintAttachment,
@@ -251,19 +265,28 @@ export function fitFrame(
 
 export class InputState {
   private held = new Set<string>();
-  constructor(private axes: Project["input"]) {}
+  constructor(
+    private axes: Project["input"],
+    private onChange?: (code: string, down: boolean) => void,
+  ) {}
   configure(axes: Project["input"]) {
     this.axes = axes;
     for (const code of this.held) if (!this.uses(code)) this.held.delete(code);
   }
   press(code: string) {
-    this.held.add(code);
+    if (!this.held.has(code)) {
+      this.held.add(code);
+      this.onChange?.(code, true);
+    }
   }
   release(code: string) {
-    this.held.delete(code);
+    if (this.held.delete(code)) this.onChange?.(code, false);
   }
   clear() {
     this.held.clear();
+  }
+  heldKey(code: string) {
+    return this.held.has(code);
   }
   uses(code: string) {
     return this.axes.some(
@@ -292,10 +315,8 @@ export function connectKeyboard(
       )
     )
       return;
-    if (input.uses(key.code)) {
-      key.preventDefault();
-      input.press(key.code);
-    }
+    if (!key.repeat) input.press(key.code);
+    if (input.uses(key.code)) key.preventDefault();
   };
   const up = (event: Event) => input.release((event as KeyboardEvent).code);
   const clear = () => input.clear();
@@ -319,6 +340,17 @@ export class Game {
   private screens: UiFlowWorld;
   readonly logs: RuntimeLog[] = [];
   scene: Scene;
+  private sceneDefinition: Scene;
+  private spawned = new Map<string, Entity>();
+  private destroyed = new Set<string>();
+  private structuralEdits: ({ created: Entity[] } | { destroy: string })[] = [];
+  private cameraOverride?: Scene["camera"];
+  private lightingOverride?: Scene["lighting"];
+  private gravityOverride?: Scene["gravity"];
+  private backgroundOverride?: string;
+  private mixOverrides = new Map<string, { gain: number; muted: boolean }>();
+  private requestedSounds = new Map<string, Set<string>>();
+  private rebuildNavigation = false;
   private scheduler: BlueprintScheduler;
   private sceneWorld?: SceneWorld;
   private behaviors = new Map<string, BehaviorRunner>();
@@ -390,9 +422,16 @@ export class Game {
   ) {
     const scene = project.scenes.find((entry) => entry.id === sceneId);
     if (!scene) throw new Error("Scene could not be found.");
-    this.scene = scene;
-    if (project.sceneFlow) this.sceneWorld = new SceneWorld(project, sceneId);
-    this.input = new InputState(project.input);
+    this.scene = this.sceneDefinition = scene;
+    if (project.sceneFlow)
+      this.sceneWorld = new SceneWorld(
+        project,
+        sceneId,
+        (id) => !this.destroyed.has(id),
+      );
+    this.input = new InputState(project.input, (code, down) =>
+      this.runtimeEvent(down ? "input.pressed" : "input.released", code),
+    );
     this.data = new GameData(project.id, project.data, slots);
     this.tiles = this.createTiles(scene);
     this.scheduler = new BlueprintScheduler(STEP, debug);
@@ -484,6 +523,10 @@ export class Game {
 
   controlUi(command: UiCommand, scene = this.scene.id) {
     this.screens.command(command, scene);
+    this.runtimeEvent(
+      "screen.changed",
+      command.screenId ?? command.themeId ?? command.action,
+    );
     if (this.screens.paused) this.input.clear();
   }
 
@@ -493,7 +536,11 @@ export class Game {
     if (project === this.project) return true;
     if (project.id !== this.project.id) return false;
     if (!this.sceneWorld && project.sceneFlow)
-      this.sceneWorld = new SceneWorld(this.project, this.scene.id);
+      this.sceneWorld = new SceneWorld(
+        this.project,
+        this.scene.id,
+        (id) => !this.destroyed.has(id),
+      );
     if (this.sceneWorld && !this.sceneWorld.reload(project)) return false;
     const scene =
       this.sceneWorld?.compose() ??
@@ -528,6 +575,7 @@ export class Game {
     const world = (this.sceneWorld ??= new SceneWorld(
       this.project,
       this.scene.id,
+      (id) => !this.destroyed.has(id),
     ));
     world.validate(command);
     this.sceneQueue.push({
@@ -569,6 +617,8 @@ export class Game {
   private commitSceneCommand(command: SceneCommand) {
     try {
       const world = this.sceneWorld!;
+      const before = world.primary;
+      const residents = new Set(world.status.loaded);
       if (world.apply(command)) {
         this.sceneRevision++;
         this.applyScene(
@@ -576,6 +626,18 @@ export class Game {
           world.compose(),
           command.operation === "reload" && command.sceneId === world.primary,
         );
+        const next = world.status.loaded;
+        for (const id of residents)
+          if (!next.includes(id)) this.runtimeEvent("scene.unloaded", id);
+        for (const id of next)
+          if (!residents.has(id)) this.runtimeEvent("scene.loaded", id);
+        if (
+          before !== world.primary ||
+          (command.operation === "reload" && command.sceneId === world.primary)
+        ) {
+          this.runtimeEvent("scene.exited", before);
+          this.runtimeEvent("scene.entered", world.primary);
+        }
       }
     } catch (error) {
       this.log({ level: "error", message: String(error) });
@@ -585,7 +647,24 @@ export class Game {
   private applyScene(project: Project, scene: Scene, resetUi = false) {
     const previous = this.project;
     const oldScene = this.scene;
+    const oldDefinition = this.sceneDefinition;
+    this.sceneDefinition = scene;
     const sceneChanged = oldScene.id !== scene.id;
+    if (sceneChanged || resetUi) {
+      this.spawned.clear();
+      this.destroyed.clear();
+      this.cameraOverride = undefined;
+      this.lightingOverride = undefined;
+      this.gravityOverride = undefined;
+      this.backgroundOverride = undefined;
+    }
+    if (this.spawned.size || this.destroyed.size)
+      scene = {
+        ...scene,
+        entities: [...scene.entities, ...this.spawned.values()].filter(
+          ({ id }) => !this.destroyed.has(id),
+        ),
+      };
     const residencyChanged = this.previousSceneRevision !== this.sceneRevision;
     this.previousSceneRevision = this.sceneRevision;
     this.project = project;
@@ -761,6 +840,8 @@ export class Game {
         if (nextIds.has(id)) continue;
         if (this.started && state.entity.audio)
           this.queueAudio(state.entity.audio.soundId, false, id);
+        for (const [sound, owners] of this.requestedSounds)
+          if (owners.has(id)) this.queueAudio(sound, false, id);
         this.world.remove(id);
         if (state.entity.tileLayers?.length) this.tileVisibilityChanged = true;
         rebuildNavigation = true;
@@ -779,7 +860,8 @@ export class Game {
     if (
       residencyChanged ||
       oldScene.tilemap !== scene.tilemap ||
-      (this.sceneWorld?.tileSources.length ?? 0) > 1
+      ((this.sceneWorld?.tileSources.length ?? 0) > 1 &&
+        oldDefinition !== this.sceneDefinition)
     ) {
       this.tiles = this.createTiles(scene);
       rebuildWorld = true;
@@ -790,7 +872,7 @@ export class Game {
         this.physics = new PhysicsWorld(
           this.componentRows("body"),
           this.tiles,
-          scene.gravity,
+          this.gravityOverride ?? scene.gravity,
           this.physics,
           keepVelocity,
         );
@@ -1095,7 +1177,7 @@ export class Game {
         typeof reference === "object" &&
         ((reference.kind === "entity" &&
           this.world.has(this.resolveReference(entity, reference.id))) ||
-          (reference.kind === "asset" && this.assets.has(reference.id))),
+          (reference.kind === "asset" && this.knownAsset(reference.id))),
       emit: (id, value) => {
         if (external) this.scheduler.queueUi(id, value);
         else this.scheduler.emit(id, value);
@@ -1103,6 +1185,22 @@ export class Game {
         this.triggerSceneSignal(id, sceneId);
         this.screens.signal(id, sceneId);
       },
+      runtimeRead: (member, target) =>
+        this.readRuntimeProperty(this.runtimeTarget(state, target), member),
+      runtimeWrite: (member, value, target) =>
+        this.writeRuntimeProperty(
+          this.runtimeTarget(state, target),
+          member,
+          value,
+        ),
+      runtimeInvoke: (member, args, target) =>
+        this.invokeRuntime(
+          state,
+          member,
+          args,
+          target,
+          source()?.sceneId ?? this.scene.id,
+        ),
       sceneFlow: (operation, target, route) => {
         if (!route) this.controlScene({ operation, sceneId: target });
         else {
@@ -1165,6 +1263,593 @@ export class Game {
     };
   }
 
+  private knownAsset(id: string) {
+    return (
+      this.assets.has(id) ||
+      this.soundIds.has(id) ||
+      !!this.project.prefabs?.some((item) => item.id === id) ||
+      !!this.project.behaviorTrees?.some((item) => item.id === id) ||
+      !!this.project.uiFlow?.screens.some((item) => item.id === id) ||
+      this.documents.has(id)
+    );
+  }
+
+  private runtimeTarget(state: WorldEntity, id?: string) {
+    if (id === undefined) return state;
+    const target = this.world.get(this.resolveReference(state.entity, id));
+    if (!target) throw new Error("The runtime target is absent.");
+    return target;
+  }
+
+  private readRuntimeProperty(state: WorldEntity, id: string): Value {
+    const { entity, animation } = state;
+    switch (id) {
+      case "entity.parentId":
+        return entityReference(entity.parentId);
+      case "entity.prefabAsset":
+        return assetReference(entity.prefab?.assetId);
+      case "entity.prefabInstance":
+        return entity.prefab?.instanceId ?? "";
+      case "entity.prefabSource":
+        return entity.prefab?.sourceId ?? "";
+      case "entity.behaviorTree":
+        return assetReference(entity.behaviorTree);
+      case "entity.blueprintId":
+        return assetReference(entity.blueprintId);
+      case "entity.attachmentCount":
+        return (entity.attachments?.length ?? 0) + Number(!!entity.blueprintId);
+      case "entity.persistent":
+        return !!entity.persistent;
+      case "entity.worldPosition":
+        return { kind: "vector", ...this.worldPoint(entity.id)! };
+      case "sprite.hasFrame":
+        return entity.visual?.kind === "sprite" && !!entity.visual.frame;
+      case "body.velocityX":
+        return this.physics.velocity(entity.id, "x");
+      case "body.velocityY":
+        return this.physics.velocity(entity.id, "y");
+      case "particles.enabled":
+        return this.particles.status(entity.id).emitting;
+      case "particles.active":
+        return this.particles.status(entity.id).active;
+      case "animator.state":
+        return animation?.stateId ?? "";
+      case "animator.clip":
+        return animation?.clipName ?? "";
+      case "animator.elapsed":
+        return animation?.elapsed ?? 0;
+      case "animator.clipCount":
+        return entity.clips.length;
+    }
+    const member = propertyMember(id);
+    const [component, key] = propertyLocation(entity, member);
+    if (member.type === "asset")
+      return assetReference(component[key] as string);
+    if (member.type === "entity")
+      return entityReference(component[key] as string);
+    const value = component[key];
+    if (value == null && (id === "camera.damping" || member.format === "id"))
+      return member.type === "number" ? 0 : "";
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    )
+      throw new Error(
+        "This property is unavailable on the selected component.",
+      );
+    return value;
+  }
+
+  private writeRuntimeProperty(state: WorldEntity, id: string, input: Value) {
+    const { entity } = state;
+    const member = propertyMember(id);
+    if (!member.writable) throw new Error("The property is read-only.");
+    const value = propertyValue(member, input);
+    if (id === "entity.visible" || id === "visual.text")
+      return this.set(
+        entity,
+        id === "entity.visible" ? "visible" : "text",
+        value,
+      );
+    if (id === "particles.enabled") {
+      this.particles.control(entity.id, value ? "start" : "stop");
+      return;
+    }
+    let replacement: unknown = value;
+    if (typeof value === "object") {
+      if (value.kind === "asset") {
+        if (
+          !(id === "audio.soundId" ? this.soundIds : this.assets).has(value.id)
+        )
+          throw new Error("Choose an available asset of the correct kind.");
+        replacement = value.id;
+      } else if (value.kind === "entity")
+        replacement = value.id ? this.target(entity, value.id).id : null;
+    }
+    const [component, key] = propertyLocation(entity, member, true);
+    if (!Object.hasOwn(component, key) && id !== "camera.damping")
+      throw new Error(
+        "This property is unavailable on the selected component.",
+      );
+    const previous = component[key];
+    component[key] = replacement;
+    if (id === "body.velocityX" || id === "body.velocityY")
+      this.physics.velocity(
+        entity.id,
+        id === "body.velocityX" ? "x" : "y",
+        Number(value),
+      );
+    if (id === "particles.seed")
+      this.particles.reseed(entity.id, Number(value));
+    if (id === "camera.enabled" && previous !== replacement)
+      this.refreshComponents();
+    if (
+      (member.component === "body" ||
+        (member.component === "transform" && entity.body?.kind === "static")) &&
+      previous !== replacement
+    )
+      this.rebuildNavigation = true;
+    if (id === "entity.order" && previous !== replacement) {
+      this.entities.sort(
+        (a, b) =>
+          this.layerOrder.get(a.entity.layerId)! -
+            this.layerOrder.get(b.entity.layerId)! ||
+          a.entity.order - b.entity.order,
+      );
+      this.entities.forEach((item, rank) => {
+        item.rank = rank;
+      });
+    }
+  }
+
+  private invokeRuntime(
+    state: WorldEntity,
+    member: string,
+    args: ReadonlyMap<string, Value>,
+    target: string | undefined,
+    sceneId: string,
+  ): Value | undefined {
+    const current = this.runtimeTarget(state, target);
+    const entity = current.entity;
+    const string = (id: string) => String(args.get(id) ?? "");
+    const number = (id: string) => Number(args.get(id));
+    const flag = (id: string) => args.get(id) === true;
+    const asset = (key: string) => {
+      const value = args.get(key);
+      if (typeof value !== "object" || value.kind !== "asset" || !value.id)
+        throw new Error("Choose a valid asset.");
+      return value.id;
+    };
+    const timeline = () =>
+      this.sceneWorld?.scopes
+        .get(state.entity.id)
+        ?.timelines.get(string("timeline")) ?? string("timeline");
+    if (member.startsWith("tile.")) {
+      const layer = string("layer");
+      const scoped =
+        this.sceneWorld?.scopes.get(state.entity.id)?.tileLayers.get(layer) ??
+        layer;
+      const { world, grid, definition } = this.tiles.layer(scoped);
+      if (member === "tile.layer")
+        return runtimeRecord("tile-layer", {
+          id: layer,
+          name: definition?.name ?? "Base",
+          width: grid.width,
+          height: grid.height,
+          size: grid.size,
+          visible: definition?.visible ?? true,
+          opacity: definition?.opacity ?? 1,
+          collision: definition?.collision ?? true,
+          navigation: definition?.navigation ?? true,
+        });
+      if (member === "tile.layerSet") {
+        if (!definition) throw new Error("Choose a named tile layer.");
+        const opacity = runtimeNumber(number("opacity"), 0, 1);
+        Object.assign(definition, {
+          visible: flag("visible"),
+          collision: flag("collision"),
+          navigation: flag("navigation"),
+          opacity,
+        });
+        this.tileVisibilityChanged = true;
+        return;
+      }
+      const terrain =
+        member === "tile.terrain" || member === "tile.paintTerrain"
+          ? world.terrainById(string("terrain"))
+          : undefined;
+      if (member === "tile.terrain" || member === "tile.paintTerrain") {
+        if (!terrain)
+          throw new Error("Terrain is missing from the selected tile map.");
+        if (member === "tile.terrain")
+          return runtimeRecord("terrain", {
+            id: terrain.id,
+            name: terrain.name,
+            color: terrain.color,
+            edge: terrain.edge,
+            solid: terrain.solid,
+            cost: terrain.cost,
+            atlas: assetReference(terrain.atlas?.assetId),
+            size: terrain.atlas?.size ?? 0,
+            columns: terrain.atlas?.columns ?? 0,
+            first: terrain.atlas?.first ?? 0,
+          });
+      }
+      const x = runtimeNumber(number("x"), 0, grid.width - 1, true),
+        y = runtimeNumber(number("y"), 0, grid.height - 1, true);
+      if (member === "tile.get") {
+        const cell = grid.at(x, y);
+        return runtimeRecord("tile", {
+          exists: !!cell,
+          color: cell ? (world.terrain(cell)?.color ?? cell.color) : "",
+          solid: !!cell && world.solid(cell),
+          cost: cell ? world.cost(cell) : 1,
+          terrain: cell?.terrainId ?? "",
+        });
+      }
+      grid.write(
+        x,
+        y,
+        terrain
+          ? { x, y, color: terrain.color, terrainId: terrain.id }
+          : member === "tile.paint"
+            ? {
+                x,
+                y,
+                color: runtimeColor(string("color")),
+                solid: flag("solid"),
+                cost: runtimeNumber(number("cost"), 1, 100),
+              }
+            : undefined,
+      );
+      this.tileVisibilityChanged = true;
+      this.runtimeEvent("tile.changed", { kind: "vector", x, y });
+      return;
+    }
+    if (member.startsWith("tree.")) {
+      const runner = this.behaviors.get(entity.id);
+      if (!runner) throw new Error("The target has no running Behavior Tree.");
+      const key = string("key");
+      if (member === "tree.read" || member.startsWith("tree.read.")) {
+        const value = runner.read(key);
+        if (value === undefined) throw new Error("Blackboard key is missing.");
+        if (member === "tree.read")
+          return typeof value === "object" && value.kind === "record"
+            ? value
+            : runtimeRecord("blackboard", { value });
+        if (typeOf(value) !== member.slice("tree.read.".length))
+          throw new Error("The blackboard key has a different type.");
+        return value;
+      }
+      runner.write(key, args.get("value")!);
+      return;
+    }
+    if (member.startsWith("ui.value.")) {
+      const id = string("widget");
+      const value = this.screens
+        .widgetWorld(this.ui, id, string("screen"), sceneId)
+        .view(id).value;
+      if (
+        value === undefined ||
+        typeOf(value) !== member.slice("ui.value.".length)
+      )
+        throw new Error("Widget value is not of the requested type.");
+      return value;
+    }
+    switch (member) {
+      case "sprite.clearFrame":
+        if (entity.visual?.kind !== "sprite")
+          throw new Error("The entity has no sprite.");
+        delete entity.visual.frame;
+        return;
+      case "audio.clip": {
+        const id = asset("sound");
+        const sound = audioAssets(this.project).find((item) => item.id === id);
+        if (!sound) throw new Error("Sound is unavailable.");
+        return runtimeRecord("sound", {
+          name: sound.name,
+          bus: sound.bus,
+          gain: sound.gain,
+          loop: sound.loop,
+        });
+      }
+      case "sprite.frame": {
+        if (entity.visual?.kind !== "sprite")
+          throw new Error("The entity has no sprite.");
+        const frame = current.animation?.frame() ?? entity.visual.frame;
+        return runtimeRecord("sprite-frame", {
+          exists: !!frame,
+          x: frame?.x ?? 0,
+          y: frame?.y ?? 0,
+          width: frame?.w ?? entity.transform.width,
+          height: frame?.h ?? entity.transform.height,
+        });
+      }
+      case "camera.settings": {
+        const camera = this.cameraSettings(),
+          bounds = camera.bounds;
+        return runtimeRecord("camera-settings", {
+          x: camera.x,
+          y: camera.y,
+          zoom: camera.zoom,
+          follow: entityReference(camera.follow),
+          offsetX: camera.offsetX ?? 0,
+          offsetY: camera.offsetY,
+          damping: camera.damping ?? 0,
+          deadWidth: camera.deadZone?.width ?? 0,
+          deadHeight: camera.deadZone?.height ?? 0,
+          bounded: !!bounds,
+          boundsX: bounds?.x ?? 0,
+          boundsY: bounds?.y ?? 0,
+          boundsWidth: bounds?.width ?? 0,
+          boundsHeight: bounds?.height ?? 0,
+        });
+      }
+      case "camera.follow": {
+        const ref = args.get("target");
+        if (typeof ref !== "object" || ref.kind !== "entity")
+          throw new Error("Choose an entity or None to clear camera follow.");
+        const follow = ref.id ? this.target(entity, ref.id).id : null;
+        this.cameraOverride = {
+          ...this.cameraSettings(),
+          follow,
+          offsetX: runtimeNumber(number("offsetX"), -1e7, 1e7),
+          offsetY: runtimeNumber(number("offsetY"), -1e7, 1e7),
+          damping: runtimeNumber(number("damping"), 0, 60),
+        };
+        this.currentCamera = undefined;
+        return;
+      }
+      case "physics.gravity":
+        return {
+          kind: "vector",
+          ...(this.gravityOverride ?? this.scene.gravity ?? { x: 0, y: 0 }),
+        };
+      case "physics.setGravity":
+        this.gravityOverride = {
+          x: runtimeNumber(number("x"), -10000, 10000),
+          y: runtimeNumber(number("y"), -10000, 10000),
+        };
+        this.physics.setGravity(this.gravityOverride);
+        return;
+      case "audio.bus":
+      case "audio.mix": {
+        const id = string("bus") || MASTER_BUS;
+        const config = this.project.mixer;
+        const authored =
+          id === MASTER_BUS
+            ? { gain: config?.master ?? 1, muted: config?.muted ?? false }
+            : config?.buses.find((bus) => bus.id === id);
+        if (!authored) throw new Error("Audio bus is missing.");
+        const mix = this.mixOverrides.get(id) ?? {
+          gain: authored.gain,
+          muted: authored.muted,
+        };
+        if (member === "audio.bus") return runtimeRecord("bus", mix);
+        const next = {
+          gain: runtimeNumber(number("gain"), 0, 1),
+          muted: flag("muted"),
+        };
+        this.mixOverrides.set(id, next);
+        if (this.audio.length >= 128) this.audio.shift();
+        this.audio.push({ soundId: id, playing: false, mix: next });
+        return;
+      }
+      case "scene.settings":
+        return runtimeRecord("scene-settings", {
+          id: this.scene.id,
+          name: this.scene.name,
+          background: this.backgroundOverride ?? this.scene.background,
+          width: this.project.width,
+          height: this.project.height,
+        });
+      case "scene.background":
+        this.backgroundOverride = runtimeColor(string("color"));
+        return;
+      case "anim.setParameter":
+        if (!current.animation) throw new Error("No active animation.");
+        current.animation.parameter(string("parameter"), number("value"));
+        return;
+      case "entity.component":
+        if (string("component") === "sprite")
+          return entity.visual?.kind === "sprite";
+        return (
+          entityComponents
+            .find(({ key }) => key === string("component"))
+            ?.present(entity) ?? false
+        );
+      case "entity.find":
+        return entityReference(
+          this.entities.find(({ entity }) => entity.name === string("name"))
+            ?.entity.id,
+        );
+      case "entity.spawn": {
+        const prefab = this.project.prefabs?.find(
+          ({ id }) => id === asset("prefab"),
+        );
+        if (!prefab) throw new Error("Prefab is unavailable.");
+        const added = instantiatePrefab(prefab, this.scene, {
+          x: runtimeNumber(number("x"), -1e7, 1e7),
+          y: runtimeNumber(number("y"), -1e7, 1e7),
+        });
+        if (
+          this.structuralEdits.length >= 64 ||
+          this.entities.length +
+            this.structuralEdits.reduce(
+              (sum, item) =>
+                sum + ("created" in item ? item.created.length : 0),
+              0,
+            ) +
+            added.length >
+            20000
+        )
+          throw new Error("Runtime entity limit reached.");
+        this.structuralEdits.push({ created: added });
+        return entityReference(added.find(({ parentId }) => !parentId)!.id);
+      }
+      case "entity.destroy":
+        if (this.structuralEdits.length >= 64)
+          throw new Error("Runtime entity command limit reached.");
+        this.structuralEdits.push({ destroy: entity.id });
+        return;
+      case "particles.control": {
+        const operation = string("operation");
+        if (
+          operation !== "burst" &&
+          operation !== "start" &&
+          operation !== "stop"
+        )
+          throw new Error("Invalid particle operation.");
+        this.particles.control(entity.id, operation);
+        return;
+      }
+      case "physics.impulse": {
+        const x = runtimeNumber(
+          number("x") + this.physics.velocity(entity.id, "x"),
+          -10000,
+          10000,
+        );
+        const y = runtimeNumber(
+          number("y") + this.physics.velocity(entity.id, "y"),
+          -10000,
+          10000,
+        );
+        this.physics.velocity(entity.id, "x", x);
+        this.physics.velocity(entity.id, "y", y);
+        return;
+      }
+      case "nav.goal": {
+        if (!entity.navigation) throw new Error("No navigation agent.");
+        const x = runtimeNumber(number("x"), -1e7, 1e7),
+          y = runtimeNumber(number("y"), -1e7, 1e7);
+        Object.assign(entity.navigation, { x, y, target: null });
+        return;
+      }
+      case "nav.remaining":
+        return this.navigation.remaining(entity.id);
+      case "camera.view":
+        return runtimeRecord("camera", {
+          ...this.view(),
+          follow: entityReference(this.cameraSettings().follow),
+        });
+      case "camera.set":
+        this.cameraOverride = {
+          ...this.scene.camera,
+          x: runtimeNumber(number("x"), -1e7, 1e7),
+          y: runtimeNumber(number("y"), -1e7, 1e7),
+          zoom: runtimeNumber(number("zoom"), 0.05, 8),
+          follow: null,
+        };
+        this.currentCamera = undefined;
+        return;
+      case "lighting.settings":
+        return runtimeRecord("lighting", {
+          ...(this.lightingOverride ??
+            this.scene.lighting ?? { enabled: false, ambient: "#ffffff" }),
+        });
+      case "lighting.set":
+        this.lightingOverride = {
+          enabled: flag("enabled"),
+          ambient: runtimeColor(string("ambient")),
+        };
+        return;
+      case "anim.parameter":
+        if (!current.animation) throw new Error("No active animation.");
+        return current.animation.readParameter(string("parameter"));
+      case "anim.play":
+        if (!current.animation) throw new Error("No active animation.");
+        current.animation.play(string("clip"));
+        return;
+      case "motion.seek":
+        this.motion.seek(timeline(), runtimeNumber(number("time"), 0, 600));
+        return;
+      case "motion.status":
+        return runtimeRecord("timeline", this.motion.status(timeline()));
+      case "audio.play": {
+        const id = asset("sound");
+        if (!this.soundIds.has(id)) throw new Error("Sound is unavailable.");
+        this.queueAudio(id, flag("playing"), entity.id);
+        return;
+      }
+      case "audio.active":
+        return !!this.requestedSounds.get(asset("sound"))?.size;
+      case "ui.get": {
+        const id = string("widget");
+        const world = this.screens.widgetWorld(
+          this.ui,
+          id,
+          string("screen"),
+          sceneId,
+        );
+        const view = world.view(id);
+        return runtimeRecord("widget", {
+          text: view.text,
+          visible: view.visible,
+          enabled: view.enabled,
+          available: world.available(id),
+          value: view.value ?? "",
+        });
+      }
+      case "ui.screen":
+        return this.screens.screenOpen(string("screen"), sceneId);
+      case "scene.status": {
+        const status = this.sceneStatus,
+          id = string("scene") || status.primary;
+        return runtimeRecord("scene", {
+          id,
+          primary: id === status.primary,
+          loaded: status.loaded.includes(id),
+          preloaded: status.preloaded.includes(id),
+        });
+      }
+      case "input.key":
+        return this.input.heldKey(string("key"));
+    }
+    throw new Error("Operation is unavailable.");
+  }
+
+  private runtimeEvent(id: string, payload: Value) {
+    this.scheduler.queueUi(runtimeEventChannel(id), payload);
+  }
+
+  private applyStructuralEdits() {
+    if (!this.structuralEdits.length) return;
+    const edits = this.structuralEdits;
+    this.structuralEdits = [];
+    const notices: { event: string; id: string }[] = [];
+    for (const edit of edits) {
+      if ("created" in edit) {
+        for (const entity of edit.created) {
+          delete entity.persistent;
+          this.spawned.set(entity.id, entity);
+        }
+        notices.push({
+          event: "entity.spawned",
+          id: edit.created.find(({ parentId }) => !parentId)!.id,
+        });
+      } else {
+        const available = [
+          ...this.sceneDefinition.entities,
+          ...this.spawned.values(),
+        ];
+        if (
+          this.destroyed.has(edit.destroy) ||
+          !available.some(({ id }) => id === edit.destroy)
+        )
+          continue;
+        for (const id of hierarchyIds(available, edit.destroy)) {
+          if (!this.spawned.delete(id)) this.destroyed.add(id);
+          this.sceneWorld?.forgetCarried(id);
+        }
+        notices.push({ event: "entity.destroyed", id: edit.destroy });
+      }
+    }
+    this.applyScene(this.project, this.sceneDefinition);
+    for (const { event, id } of notices)
+      this.runtimeEvent(event, entityReference(id));
+  }
+
   private effect(state: WorldEntity, command: EffectCommand) {
     switch (command.kind) {
       case "animationParameter":
@@ -1200,6 +1885,18 @@ export class Game {
   }
 
   private queueAudio(soundId: string, playing: boolean, owner?: string) {
+    let requests = this.requestedSounds.get(soundId);
+    if (playing) {
+      if (!requests) {
+        requests = new Set();
+        this.requestedSounds.set(soundId, requests);
+      }
+      requests.add(owner ?? "");
+    } else if (!owner) this.requestedSounds.delete(soundId);
+    else {
+      requests?.delete(owner);
+      if (!requests?.size) this.requestedSounds.delete(soundId);
+    }
     if (this.audio.length === 128) this.audio.shift();
     this.audio.push(owner ? { soundId, playing, owner } : { soundId, playing });
   }
@@ -1320,6 +2017,7 @@ export class Game {
       if (entity.audio?.autoplay)
         this.queueAudio(entity.audio.soundId, true, entity.id);
     this.scheduler.start(this.program);
+    this.runtimeEvent("scene.entered", this.scene.id);
   }
   private beginTick() {
     this.tickPending = true;
@@ -1330,13 +2028,40 @@ export class Game {
     this.tickPending = false;
     if (this.behaviors.size)
       for (const behavior of this.behaviors.values()) behavior.tick(STEP);
+    this.applyStructuralEdits();
+    if (this.rebuildNavigation) {
+      this.rebuildNavigation = false;
+      const entities = this.entities.map(({ entity }) => entity);
+      this.navigation = new NavigationWorld(
+        new NavigationGrid(this.tiles, entities),
+        entities,
+      );
+    }
     this.motion.step(STEP);
     if (this.tileVisibilityChanged) {
       this.navigation.invalidate();
       this.tileVisibilityChanged = false;
     }
-    this.navigation.step(STEP, this.physics);
+    const arrival = runtimeEventChannel("nav.arrived");
+    this.navigation.step(
+      STEP,
+      this.physics,
+      this.scheduler.listens(arrival)
+        ? (id) => this.scheduler.queueContact(arrival, id, entityReference(id))
+        : undefined,
+    );
+    const enter = runtimeEventChannel("physics.entered"),
+      exit = runtimeEventChannel("physics.exited");
+    const contactListeners =
+      this.scheduler.listens(enter) || this.scheduler.listens(exit);
+    this.physics.watchRuntimeContacts(contactListeners);
     this.physics.step(STEP, ({ entityId, otherId, phase }) => {
+      if (contactListeners)
+        this.scheduler.queueContact(
+          phase === "enter" ? enter : exit,
+          entityId,
+          entityReference(otherId),
+        );
       const body = this.world.get(entityId)?.entity.body;
       const signal = phase === "enter" ? body?.enterSignal : body?.exitSignal;
       if (!signal) return;
@@ -1356,7 +2081,20 @@ export class Game {
       this.currentCamera,
       STEP,
     );
-    for (const animation of this.animations) animation.step(STEP);
+    const animationEvent = runtimeEventChannel("anim.changed");
+    if (this.scheduler.listens(animationEvent)) {
+      for (const { entity, animation } of this.entities) {
+        if (!animation) continue;
+        const state = animation.stateId;
+        animation.step(STEP);
+        if (animation.stateId !== state)
+          this.scheduler.queueContact(
+            animationEvent,
+            entity.id,
+            animation.stateId ?? "",
+          );
+      }
+    } else for (const animation of this.animations) animation.step(STEP);
     this.stepParticles(STEP);
     this.time += STEP;
     this.processScenes(STEP);
@@ -1371,6 +2109,7 @@ export class Game {
     const pending = this.tickPending;
     this.finishTick();
     if (this.scheduler.paused) return;
+    if (!pending) this.applyStructuralEdits();
     if (!pending)
       this.processScenes(this.screens.paused ? Math.min(seconds, 0.15) : 0);
     if (this.screens.paused) {
@@ -1452,6 +2191,7 @@ export class Game {
       scene.tilemap,
       (layer) => this.tileOwners.get(layer)?.visible ?? true,
       this.sceneWorld?.tileSources,
+      this.tiles,
     );
   }
 
@@ -1569,6 +2309,7 @@ export class Game {
   }
 
   private cameraSettings(): Scene["camera"] {
+    if (this.cameraOverride) return this.cameraOverride;
     if (!this.componentCamera?.camera) return this.scene.camera;
     return {
       x: this.componentCamera.transform.x,
@@ -1774,7 +2515,7 @@ export class Game {
       ),
     );
     flushParticles();
-    const config = this.scene.lighting;
+    const config = this.lightingOverride ?? this.scene.lighting;
     const lighting: LightingPass | undefined = config?.enabled
       ? { ambient: config.ambient, worldDraws: draws.length, lights: [] }
       : undefined;
@@ -1822,7 +2563,7 @@ export class Game {
     return {
       width,
       height,
-      background: this.scene.background,
+      background: this.backgroundOverride ?? this.scene.background,
       draws,
       ...(lighting ? { lighting } : {}),
     };

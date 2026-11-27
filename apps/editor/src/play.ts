@@ -88,8 +88,10 @@ export function startTransport() {
     if (
       state.runId !== previous.runId ||
       (state.transport === "editing" && previous.transport !== "editing")
-    )
+    ) {
       audio.stopAll();
+      audio.resetRuntimeMix();
+    }
     if (
       state.transport === "playing" &&
       (state.runId !== previous.runId || previous.transport !== "playing")

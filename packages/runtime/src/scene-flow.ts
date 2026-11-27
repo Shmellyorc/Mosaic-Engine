@@ -8,6 +8,7 @@ type EntityScope = {
   name: string;
   entities: Map<string, string>;
   timelines: Map<string, string>;
+  tileLayers: Map<string, string>;
 };
 export type SceneCommand = {
   operation: SceneOperation;
@@ -39,6 +40,7 @@ export class SceneWorld {
   constructor(
     public project: Project,
     public primary: string,
+    private canCarry: (id: string) => boolean = () => true,
   ) {
     const source = this.source(primary);
     this.reserved = new Set(source.entities.map(({ id }) => id));
@@ -56,6 +58,18 @@ export class SceneWorld {
       this.project.scenes.find((scene) => scene.id === id);
     if (!source) throw new Error(`Scene "${id}" does not exist.`);
     return source;
+  }
+
+  forgetCarried(id: string) {
+    for (const [scene, entries] of this.carried) {
+      for (const [source, entity] of entries)
+        if (entity.id === id) {
+          entries.delete(source);
+          const mount = this.loaded.get(scene);
+          if (mount) this.mountedCache.delete(mount);
+        }
+      if (!entries.size) this.carried.delete(scene);
+    }
   }
 
   isLoaded(sceneId: string) {
@@ -212,6 +226,9 @@ export class SceneWorld {
       name: source.name,
       entities: entityIds,
       timelines: timelineIds,
+      tileLayers: new Map(
+        source.tilemap.layers?.map(({ id }) => [id, tileLayerId(id)]),
+      ),
     };
     const result = {
       scope,
@@ -283,7 +300,11 @@ export class SceneWorld {
 
   private carry(slice: Mounted) {
     const { entities, scope } = this.materialize(slice);
-    const byId = new Map(entities.map((entity) => [entity.id, entity]));
+    const byId = new Map(
+      entities
+        .filter(({ id }) => this.canCarry(id))
+        .map((entity) => [entity.id, entity]),
+    );
     const rooted = new Map<string, string>();
     const rootOf = (entity: Entity) => {
       const visited: string[] = [];
@@ -300,7 +321,7 @@ export class SceneWorld {
       }
     };
     const roots = new Set(
-      entities.filter(({ persistent }) => persistent).map(rootOf),
+      [...byId.values()].filter(({ persistent }) => persistent).map(rootOf),
     );
     if (!roots.size) return;
     let carried = this.carried.get(slice.id);
@@ -356,6 +377,7 @@ export class SceneWorld {
               [...carried].map(([original, entity]) => [original, entity.id]),
             ),
             timelines: new Map<string, string>(),
+            tileLayers: new Map<string, string>(),
           };
       for (const entity of carried.values()) {
         this.scopes.set(entity.id, scope);

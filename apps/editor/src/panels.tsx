@@ -1,3 +1,4 @@
+import { transformRuntimeFields } from "@mosaic/blueprints";
 import { newPatch, newTracker } from "./audio-creation";
 import { newBehaviorTree } from "./behavior-tree";
 import { newUiScreen } from "./ui-flow";
@@ -598,16 +599,17 @@ export function HierarchyPanel() {
   );
 }
 
-const transforms = [
-  ["x", "X", 0.1],
-  ["y", "Y", 0.1],
-  ["width", "Width", 1, 1, 8192],
-  ["height", "Height", 1, 1, 8192],
-  ["rotation", "Rotation", 0.1],
-  ["alpha", "Opacity", 0.01, 0, 1],
-  ["scaleX", "Scale X", 0.01, -100, 100],
-  ["scaleY", "Scale Y", 0.01, -100, 100],
-] as const;
+const transforms = transformRuntimeFields.map(({ key, name, bounds }) => ({
+  key: key as keyof Entity["transform"],
+  label: name,
+  step: bounds?.[2]
+    ? 1
+    : key === "alpha" || key?.startsWith("scale")
+      ? 0.01
+      : 0.1,
+  min: bounds?.[0],
+  max: bounds?.[1],
+}));
 export function InspectorPanel() {
   const workspace = useEditor((state) => state.workspace);
   if (
@@ -749,7 +751,7 @@ function EntityInspector() {
       </Section>
       <Section title="Transform">
         <div className="numeric-grid">
-          {transforms.map(([key, label, step, min, max]) => (
+          {transforms.map(({ key, label, step, min, max }) => (
             <Field key={key} label={label}>
               <NumberField
                 label={label}

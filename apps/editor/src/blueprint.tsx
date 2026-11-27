@@ -1,3 +1,15 @@
+import { create } from "zustand";
+import { produce } from "immer";
+import {
+  actions,
+  groupItems,
+  initialField,
+  operationArguments,
+  readable,
+  RuntimeArgs,
+  RuntimeMemberSelect,
+  writable,
+} from "./blueprint-runtime";
 import {
   ChevronDown,
   ChevronRight,
@@ -36,6 +48,11 @@ import {
 } from "react";
 import {
   compileBlueprint,
+  runtimeField,
+  runtimeOperation,
+  runtimeEvent,
+  runtimeEvents,
+  runtimeRecordMembers,
   blueprintDependencies,
   children as blockChildren,
   displayValue,
@@ -89,6 +106,18 @@ import { enumLabel, TypeOptions, ValueControl } from "./blueprint-values";
 import { emptyCatalog } from "./data-controls";
 
 const kinds = {
+  runtimeWrite: {
+    name: "Write Runtime Property",
+    description: "Change a typed property on a target.",
+    tone: "green",
+    Icon: Settings2,
+  },
+  runtimeAction: {
+    name: "Run System Action",
+    description: "Run a typed engine operation.",
+    tone: "green",
+    Icon: Zap,
+  },
   set: {
     name: "Set Variable",
     description: "Store a typed value for this entity.",
@@ -274,9 +303,13 @@ const symbolByKind = (block: Block) =>
     ? Gamepad2
     : kinds[block.kind].Icon;
 const nameByKind = (block: Block) =>
-  block.kind === "set" && block.value.kind === "input"
-    ? "Read Input"
-    : kinds[block.kind].name;
+  block.kind === "runtimeWrite"
+    ? "Set " + (runtimeField(block.member)?.name ?? "Property")
+    : block.kind === "runtimeAction"
+      ? (runtimeOperation(block.member)?.name ?? "System Action")
+      : block.kind === "set" && block.value.kind === "input"
+        ? "Read Input"
+        : kinds[block.kind].name;
 
 function findBlock(blocks: Block[], id: string): Match | undefined {
   for (let index = 0; index < blocks.length; index++) {
@@ -300,6 +333,8 @@ function activeEvent(blueprint: Blueprint, eventId: string | null) {
   );
 }
 function entryName(entry: Entry, signals: readonly Signal[]): string {
+  if ("kind" in entry && entry.kind === "runtime")
+    return runtimeEvent(entry.signalId ?? "")?.name ?? "Missing Runtime Event";
   if ("parameters" in entry) return entry.name;
   if (entry.kind === "start") return "On Start";
   if (entry.kind === "update") return "Update (Every Frame)";
@@ -332,8 +367,11 @@ function variablesAt(
   const variables: Variable[] = [...blueprint.variables];
   if (!entry) return variables;
   if ("parameters" in entry) variables.push(...entry.parameters);
-  else if (entry.kind === "signal") {
-    const signal = signals.find((signal) => signal.id === entry.signalId);
+  else if (entry.kind === "signal" || entry.kind === "runtime") {
+    const signal =
+      entry.kind === "runtime"
+        ? runtimeEvent(entry.signalId ?? "")
+        : signals.find((signal) => signal.id === entry.signalId);
     if (signal && signal.type !== "void")
       variables.push({ id: entry.id, name: "payload", type: signal.type });
   }
@@ -360,6 +398,26 @@ function variablesAt(
   }
   return walk(entry.blocks, variables) ?? variables;
 }
+function canInsert(
+  kind: BlockKind,
+  blueprint: Blueprint,
+  address: ListAddress,
+) {
+  const entry = entries(blueprint).find(({ id }) => id === address.eventId);
+  const stack = getBlocks(blueprint, address);
+  if (!entry || !stack || stack.length >= 500) return false;
+  if (kind === "return") return "parameters" in entry;
+  if (kind !== "break" && kind !== "continue") return true;
+  const nestedLoop = (blocks: Block[], inLoop: boolean): boolean =>
+    blocks.some((block) => {
+      const loop = inLoop || block.kind === "repeat" || block.kind === "while";
+      if (block.id === address.parentId) return loop;
+      return blockChildren(block).some(({ blocks }) =>
+        nestedLoop(blocks, loop),
+      );
+    });
+  return !!address.parentId && nestedLoop(entry.blocks, false);
+}
 function changeBlock(
   address: ListAddress,
   id: string,
@@ -377,10 +435,29 @@ function makeBlock(
   signals: readonly Signal[],
   entry: Entry | undefined,
   clip?: string,
+  member?: string,
 ): Block {
   const id = newId();
   const firstVariable = variables[0];
   switch (kind) {
+    case "runtimeWrite": {
+      const field = runtimeField(member ?? "") ?? writable[0];
+      return {
+        id,
+        kind,
+        member: field.id,
+        value: initialField(field),
+      };
+    }
+    case "runtimeAction": {
+      const operation = runtimeOperation(member ?? "") ?? actions[0];
+      return {
+        id,
+        kind,
+        member: operation.id,
+        args: operationArguments(operation),
+      };
+    }
     case "set":
       return {
         id,
@@ -487,25 +564,43 @@ function makeBlock(
       return { id, kind, value: literal("Hello from Mosaic") };
   }
 }
-function addBlock(kind: BlockKind, address?: ListAddress) {
+function addBlock(
+  kind: BlockKind,
+  address?: ListAddress,
+  before?: string,
+  member?: string,
+) {
   const state = useEditor.getState();
   const blueprint = selectedBlueprint(state);
   if (!blueprint) return;
   const event = activeEvent(blueprint, state.eventId);
   if (!address && !event) return;
   const target = address ?? { eventId: event!.id };
+  if (!canInsert(kind, blueprint, target)) {
+    state.report(
+      "That block needs a compatible event, function or loop stack.",
+      "error",
+    );
+    return;
+  }
   const signals = state.project.signals ?? emptySignals;
   const block = makeBlock(
     kind,
     blueprint,
-    variablesAt(blueprint, target, signals),
+    variablesAt(blueprint, target, signals, before),
     signals,
     entries(blueprint).find((entry) => entry.id === target.eventId),
     selectedEntity(state)?.clips[0]?.name,
+    member,
   );
   editBlueprint((draft) => {
     draft.version = 2;
-    getBlocks(draft, target)?.push(block);
+    const list = getBlocks(draft, target);
+    if (!list || list.length >= 500) return;
+    const index = before
+      ? list.findIndex(({ id }) => id === before)
+      : list.length;
+    if (index >= 0) list.splice(index, 0, block);
   });
   useEditor.setState({ selectedTile: block.id });
 }
@@ -583,6 +678,13 @@ function initialData(
 }
 
 function recordFields(catalog: Catalog, node: Expression) {
+  if (
+    node.kind === "runtimeRead" &&
+    Object.hasOwn(runtimeRecordMembers, node.member)
+  )
+    return Object.entries(runtimeRecordMembers[node.member]).map(
+      ([id, type]) => ({ id, name: id, type }),
+    );
   let schema: string | undefined;
   if (node.kind === "data") {
     const index = indexCatalog(catalog);
@@ -611,6 +713,91 @@ type ExprProps = {
   axes: Project["input"];
   change: (expr: Expression) => void;
 };
+type ExpressionItem =
+  | { kind: "read"; member: string }
+  | { kind: "value"; expression: Expression; type: ValueType }
+  | { kind: "variable" | "global" | "axis"; id?: string };
+type TileDrag =
+  | { kind: "existing"; id: string }
+  | { kind: "new"; tile: BlockKind; member?: string }
+  | ExpressionItem;
+const useGetter = create<{ item?: ExpressionItem; label?: string }>(() => ({}));
+let activeDrag: TileDrag | undefined;
+const dragType = "application/x-mosaic-block";
+function beginDrag(event: DragEvent, data: TileDrag) {
+  activeDrag = data;
+  event.dataTransfer.setData(dragType, JSON.stringify(data));
+  event.dataTransfer.effectAllowed = data.kind === "existing" ? "move" : "copy";
+}
+function endDrag() {
+  activeDrag = undefined;
+  for (const target of document.querySelectorAll("[data-drop-ready]"))
+    target.removeAttribute("data-drop-ready");
+}
+function dropMark(event: DragEvent, allowed: boolean) {
+  if (!event.dataTransfer.types.includes(dragType)) return;
+  event.stopPropagation();
+  if (!allowed) {
+    event.currentTarget.removeAttribute("data-drop-ready");
+    event.dataTransfer.dropEffect = "none";
+    return;
+  }
+  event.preventDefault();
+  event.currentTarget.setAttribute("data-drop-ready", "true");
+  event.dataTransfer.dropEffect =
+    activeDrag?.kind === "existing" ? "move" : "copy";
+}
+function clearMark(event: DragEvent) {
+  if (
+    !(event.relatedTarget instanceof Node) ||
+    !event.currentTarget.contains(event.relatedTarget)
+  )
+    event.currentTarget.removeAttribute("data-drop-ready");
+}
+function expressionTile(
+  item: ExpressionItem,
+  variables: Variable[],
+  project: Project,
+  expected?: ValueType,
+): Expression | undefined {
+  const match = (type: ValueType) => !expected || expected === type;
+  if (item.kind === "value")
+    return match(item.type) ? item.expression : undefined;
+  if (item.kind === "read") {
+    const field = runtimeField(item.member);
+    const operation = runtimeOperation(item.member);
+    const type = field?.type ?? operation?.result;
+    if (!type || !match(type)) return;
+    return {
+      kind: "runtimeRead",
+      member: item.member,
+      ...(operation ? { args: operationArguments(operation) } : {}),
+    };
+  }
+  if (item.kind === "axis") {
+    const axis =
+      project.input.find(({ id }) => id === item.id) ??
+      (!item.id ? project.input[0] : undefined);
+    return axis && match("number") ? { kind: "input", id: axis.id } : undefined;
+  }
+  if (item.kind === "variable") {
+    const variable = variables.find(
+      ({ id, type }) => (!item.id || id === item.id) && match(type),
+    );
+    return variable ? { kind: "variable", id: variable.id } : undefined;
+  }
+  const global = project.data?.globals.find(
+    ({ id, initial }) => (!item.id || id === item.id) && match(typeOf(initial)),
+  );
+  return global
+    ? {
+        kind: "data",
+        source: "global",
+        id: global.id,
+        type: typeOf(global.initial),
+      }
+    : undefined;
+}
 function ExpressionControl({
   expr,
   label,
@@ -619,6 +806,24 @@ function ExpressionControl({
   axes,
   change,
 }: ExprProps) {
+  const project = useEditor((state) => state.project);
+  const pendingGetter = useGetter((state) => state.item);
+  const readyGetter =
+    pendingGetter &&
+    expressionTile(pendingGetter, variables, project, expected);
+  const selectExpression = (key: string) => {
+    const [kind, id] = JSON.parse(key) as [
+      "read" | "variable" | "global" | "axis",
+      string,
+    ];
+    const next = expressionTile(
+      kind === "read" ? { kind, member: id } : { kind, id },
+      variables,
+      project,
+      expected,
+    );
+    if (next) change(next);
+  };
   const [editing, setEditing] = useState(false);
   const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
   const extensions = useEditor((state) => state.project.extensions);
@@ -734,6 +939,20 @@ function ExpressionControl({
           </span>
         );
       }
+      case "runtimeRead": {
+        const field = runtimeField(expression.member);
+        const operation = runtimeOperation(expression.member);
+        return (
+          <span>
+            {expression.target
+              ? summary(expression.target)
+              : field || operation?.scope === "entity"
+                ? "Self"
+                : "Scene"}{" "}
+            · {field?.name ?? operation?.name ?? "Missing property"}
+          </span>
+        );
+      }
       case "property":
         return (
           <span>
@@ -824,6 +1043,21 @@ function ExpressionControl({
       case "query":
         change({ kind, query: expected === "string" ? "scene" : "self" });
         break;
+      case "runtimeRead": {
+        const member = readable.find(
+          ({ type }) => !expected || type === expected,
+        );
+        if (member) {
+          const next = expressionTile(
+            { kind: "read", member: member.id },
+            variables,
+            project,
+            expected,
+          );
+          if (next) change(next);
+        }
+        break;
+      }
       case "property":
         change({
           kind,
@@ -857,6 +1091,58 @@ function ExpressionControl({
         break;
     }
   }
+  const hint = (node: Expression): ValueType | undefined => {
+    switch (node.kind) {
+      case "literal":
+        return typeOf(node.value);
+      case "variable":
+        return variables.find(({ id }) => id === node.id)?.type;
+      case "input":
+      case "component":
+        return "number";
+      case "query":
+        return node.query === "scene" ? "string" : "entity";
+      case "property":
+        return propertyTypes[node.property];
+      case "runtimeRead":
+        return (
+          runtimeField(node.member)?.type ??
+          runtimeOperation(node.member)?.result
+        );
+      case "data":
+      case "field":
+        return node.type;
+      case "extension":
+        return extensionOptions.find(
+          ({ extensionId, fn }) =>
+            extensionId === node.extensionId && fn.id === node.functionId,
+        )?.fn.result;
+      case "vector":
+        return "vector";
+      case "exists":
+        return "boolean";
+      case "toText":
+        return "string";
+      case "unary":
+        return node.op === "not" ? "boolean" : "number";
+      case "binary":
+        return ["+", "-", "*", "/", "%"].includes(node.op)
+          ? node.op === "+" && hint(node.left) === "string"
+            ? "string"
+            : "number"
+          : "boolean";
+    }
+  };
+  const operand = (
+    other: Expression,
+    operator: Binary,
+  ): ValueType | undefined => {
+    if (operator === "and" || operator === "or") return "boolean";
+    if (operator === "==" || operator === "!=") return hint(other);
+    if (operator === "+" && (expected === "string" || hint(other) === "string"))
+      return "string";
+    return "number";
+  };
   const nested = (
     name: string,
     value: Expression,
@@ -875,12 +1161,37 @@ function ExpressionControl({
     </Field>
   );
   return (
-    <div className="expression">
+    <div
+      className="expression"
+      data-expression-label={label}
+      data-getter-ready={!!readyGetter || undefined}
+      onDragOver={(event) => {
+        const item = activeDrag;
+        if (!item || item.kind === "existing" || item.kind === "new") return;
+        dropMark(event, !!expressionTile(item, variables, project, expected));
+      }}
+      onDragLeave={clearMark}
+      onDrop={(event) => {
+        const item = activeDrag;
+        if (!item || item.kind === "existing" || item.kind === "new") return;
+        event.stopPropagation();
+        event.currentTarget.removeAttribute("data-drop-ready");
+        const next = expressionTile(item, variables, project, expected);
+        if (!next) return;
+        event.preventDefault();
+        change(next);
+      }}
+    >
       <button
         className="expression-summary"
         aria-label={`Edit ${label}`}
         aria-expanded={editing}
-        onClick={() => setEditing(!editing)}
+        onClick={() => {
+          if (readyGetter) {
+            change(readyGetter);
+            useGetter.setState({ item: undefined, label: undefined });
+          } else setEditing(!editing);
+        }}
       >
         {summary(expr)}
         <ChevronDown size={12} />
@@ -902,6 +1213,7 @@ function ExpressionControl({
               <option value="unary">Unary operation</option>
               <option value="query">Scene query</option>
               <option value="property">Read property</option>
+              <option value="runtimeRead">Get runtime property</option>
               <option value="exists">Reference exists</option>
               <option value="toText">To text</option>
               <option value="vector">Make vector</option>
@@ -914,6 +1226,95 @@ function ExpressionControl({
               )}
             </select>
           </Field>
+          <Field label="Insert getter">
+            <select
+              aria-label={label + " insert getter"}
+              value=""
+              onChange={(event) => {
+                if (event.target.value) selectExpression(event.target.value);
+              }}
+            >
+              <option value="">Choose a getter</option>
+              <optgroup label="Variables">
+                {variables
+                  .filter(({ type }) => !expected || type === expected)
+                  .map(({ id, name }) => (
+                    <option key={id} value={JSON.stringify(["variable", id])}>
+                      {name}
+                    </option>
+                  ))}
+              </optgroup>
+              <optgroup label="Globals">
+                {project.data?.globals
+                  .filter(
+                    ({ initial }) => !expected || typeOf(initial) === expected,
+                  )
+                  .map(({ id, name }) => (
+                    <option key={id} value={JSON.stringify(["global", id])}>
+                      {name}
+                    </option>
+                  ))}
+              </optgroup>
+              {[
+                ...groupItems(
+                  readable.filter(({ type }) => !expected || type === expected),
+                ),
+              ].map(([group, items]) => (
+                <optgroup key={group} label={group}>
+                  {items.map(({ id, name }) => (
+                    <option key={id} value={JSON.stringify(["read", id])}>
+                      {name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
+          {expr.kind === "runtimeRead" && (
+            <>
+              <RuntimeMemberSelect
+                label={label + " property or reader"}
+                member={expr.member}
+                members={readable.filter(
+                  ({ type }) => !expected || type === expected,
+                )}
+                change={(member) => {
+                  const next = expressionTile(
+                    { kind: "read", member },
+                    variables,
+                    project,
+                    expected,
+                  );
+                  if (next) change(next);
+                }}
+              />
+              {(runtimeField(expr.member) ||
+                runtimeOperation(expr.member)?.scope === "entity") && (
+                <TargetChoice
+                  target={expr.target}
+                  set={(target) => change({ ...expr, target })}
+                  render={(target) =>
+                    nested(
+                      "Entity",
+                      target,
+                      (target) => change({ ...expr, target }),
+                      "entity",
+                    )
+                  }
+                />
+              )}
+              {runtimeOperation(expr.member) && (
+                <RuntimeArgs
+                  operation={runtimeOperation(expr.member)!}
+                  args={expr.args ?? {}}
+                  change={(args) => change({ ...expr, args })}
+                  render={(name, node, update, type) =>
+                    nested(name, node, update, type)
+                  }
+                />
+              )}
+            </>
+          )}
           <ExpressionEntry
             label={label}
             variables={variables}
@@ -1270,6 +1671,7 @@ function ExpressionControl({
                   label={`${label} left`}
                   variables={variables}
                   axes={axes}
+                  expected={operand(expr.right, expr.op)}
                   change={(left) => change({ ...expr, left })}
                 />
               </Field>
@@ -1279,6 +1681,7 @@ function ExpressionControl({
                   label={`${label} right`}
                   variables={variables}
                   axes={axes}
+                  expected={operand(expr.left, expr.op)}
                   change={(right) => change({ ...expr, right })}
                 />
               </Field>
@@ -1406,6 +1809,7 @@ function TargetChoice({
   );
 }
 function AddBlock({ address }: { address: ListAddress }) {
+  const blueprint = useEditor(selectedBlueprint);
   return (
     <label className="add-block">
       <Plus size={15} />
@@ -1423,7 +1827,13 @@ function AddBlock({ address }: { address: ListAddress }) {
           Add Block
         </option>
         {Object.entries(kinds).map(([key, info]) => (
-          <option value={key} key={key}>
+          <option
+            value={key}
+            key={key}
+            disabled={
+              !blueprint || !canInsert(key as BlockKind, blueprint, address)
+            }
+          >
             {info.name}
           </option>
         ))}
@@ -1432,39 +1842,144 @@ function AddBlock({ address }: { address: ListAddress }) {
   );
 }
 
-const dragType = "application/x-mosaic-block";
-function dropBlock(event: DragEvent, address: ListAddress, target?: string) {
-  const source = event.dataTransfer.getData(dragType);
-  if (!source || source === target) return;
-  event.preventDefault();
-  event.stopPropagation();
-  editBlueprint((draft) => {
-    const from = entries(draft)
-      .map((entry) => findBlock(entry.blocks, source))
-      .find(Boolean);
-    const to = getBlocks(draft, address);
-    if (!from || !to || from.block.id === address.parentId) return;
-    if (
+function sourceBlock(blueprint: Blueprint, id: string) {
+  return entries(blueprint)
+    .map((entry) => findBlock(entry.blocks, id))
+    .find(Boolean);
+}
+function canMove(
+  blueprint: Blueprint,
+  source: string,
+  address: ListAddress,
+  target?: string,
+) {
+  const from = sourceBlock(blueprint, source);
+  const to = getBlocks(blueprint, address);
+  return (
+    !!from &&
+    !!to &&
+    (to === from.blocks || to.length < 500) &&
+    source !== target &&
+    source !== address.parentId &&
+    !(
       address.parentId &&
-      blockChildren(from.block).some((child) =>
-        findBlock(child.blocks, address.parentId!),
+      blockChildren(from.block).some(({ blocks }) =>
+        findBlock(blocks, address.parentId!),
       )
     )
-      return;
-    const [block] = from.blocks.splice(from.index, 1);
-    const index = target
-      ? to.findIndex((block) => block.id === target)
-      : to.length;
-    if (index >= 0) to.splice(index, 0, block);
-    else from.blocks.splice(from.index, 0, block);
-  });
+  );
 }
-function allowDrop(event: DragEvent) {
-  if (event.dataTransfer.types.includes(dragType)) {
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
+function movement(
+  blueprint: Blueprint,
+  source: string,
+  address: ListAddress,
+  target?: string,
+) {
+  const from = sourceBlock(blueprint, source)!;
+  const to = getBlocks(blueprint, address)!;
+  const [block] = from.blocks.splice(from.index, 1);
+  const index = target ? to.findIndex(({ id }) => id === target) : to.length;
+  if (index < 0) from.blocks.splice(from.index, 0, block);
+  else to.splice(index, 0, block);
+}
+function validMovement(
+  blueprint: Blueprint,
+  project: Project,
+  source: string,
+  address: ListAddress,
+  target?: string,
+) {
+  if (!canMove(blueprint, source, address, target)) return false;
+  const validate = (value: Blueprint) =>
+    compileBlueprint(
+      value,
+      new Set(project.input.map(({ id }) => id)),
+      project.signals,
+      indexCatalog(project.data ?? emptyCatalog),
+      project.extensions,
+    ).diagnostics;
+  const keys = new Set(
+    validate(blueprint).map((issue) => JSON.stringify(issue)),
+  );
+  return validate(
+    produce(blueprint, (draft) => movement(draft, source, address, target)),
+  ).every((issue) => keys.has(JSON.stringify(issue)));
+}
+function moveBlock(source: string, address: ListAddress, target?: string) {
+  const state = useEditor.getState();
+  const blueprint = selectedBlueprint(state);
+  if (
+    !blueprint ||
+    !validMovement(blueprint, state.project, source, address, target)
+  ) {
+    state.report("That move would break Blueprint scope or nesting.", "error");
+    return;
   }
+  editBlueprint((draft) => movement(draft, source, address, target));
+}
+let checkedDrop:
+  { blueprint: Blueprint; key: string; allowed: boolean } | undefined;
+function allowDrop(event: DragEvent, address: ListAddress, target?: string) {
+  const item = activeDrag;
+  if (!item || !event.dataTransfer.types.includes(dragType)) return;
+  if (item.kind !== "existing" && item.kind !== "new") return;
+  const state = useEditor.getState(),
+    blueprint = selectedBlueprint(state);
+  if (!blueprint) return;
+  if (item.kind === "new") {
+    dropMark(event, canInsert(item.tile, blueprint, address));
+    return;
+  }
+  const key = JSON.stringify([item.id, address, target]);
+  if (checkedDrop?.blueprint !== blueprint || checkedDrop.key !== key)
+    checkedDrop = {
+      blueprint,
+      key,
+      allowed: validMovement(
+        blueprint,
+        state.project,
+        item.id,
+        address,
+        target,
+      ),
+    };
+  dropMark(event, checkedDrop.allowed);
+}
+function dropBlock(event: DragEvent, address: ListAddress, target?: string) {
+  const item = activeDrag;
+  if (!item || (item.kind !== "existing" && item.kind !== "new")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.currentTarget.removeAttribute("data-drop-ready");
+  if (item.kind === "existing") moveBlock(item.id, address, target);
+  else addBlock(item.tile, address, target, item.member);
+  endDrag();
+}
+function stackDestinations(
+  blueprint: Blueprint,
+  blockId: string,
+  signals: readonly Signal[],
+) {
+  const destinations: { address: ListAddress; name: string }[] = [];
+  function visit(blocks: Block[], address: ListAddress, name: string) {
+    if (canMove(blueprint, blockId, address))
+      destinations.push({ address, name });
+    for (const node of blocks)
+      if (node.id !== blockId)
+        for (const child of blockChildren(node))
+          visit(
+            child.blocks,
+            {
+              eventId: address.eventId,
+              parentId: node.id,
+              branch: child.branch,
+            },
+            name + " / " + nameByKind(node) + " " + child.branch,
+          );
+  }
+  for (const entry of entries(blueprint))
+    visit(entry.blocks, { eventId: entry.id }, entryName(entry, signals));
+  return destinations;
 }
 interface Cards {
   blueprint: Blueprint;
@@ -1480,7 +1995,9 @@ function CardList({
   return (
     <div
       className="card-list"
-      onDragOver={allowDrop}
+      data-stack={address.branch ?? "event"}
+      onDragOver={(event) => allowDrop(event, address)}
+      onDragLeave={clearMark}
       onDrop={(event) => dropBlock(event, address)}
     >
       {blocks.map((block, index) => (
@@ -1553,12 +2070,11 @@ function BlockCard({
       axes={axes}
     />
   );
-  const move = (offset: number) =>
-    editBlueprint((draft) => {
-      const list = getBlocks(draft, address);
-      if (!list || index + offset < 0 || index + offset >= list.length) return;
-      [list[index + offset], list[index]] = [list[index], list[index + offset]];
-    });
+  const move = (offset: number) => {
+    const list = getBlocks(blueprint, address);
+    if (!list || index + offset < 0 || index + offset >= list.length) return;
+    moveBlock(block.id, address, list[offset < 0 ? index - 1 : index + 2]?.id);
+  };
   const variable =
     block.kind === "set"
       ? variables.find((variable) => variable.id === block.variable)
@@ -1573,7 +2089,8 @@ function BlockCard({
         event.stopPropagation();
         useEditor.setState({ selectedTile: block.id });
       }}
-      onDragOver={allowDrop}
+      onDragOver={(event) => allowDrop(event, address, block.id)}
+      onDragLeave={clearMark}
       onDrop={(event) => dropBlock(event, address, block.id)}
     >
       <header className="logic-header">
@@ -1582,10 +2099,10 @@ function BlockCard({
           aria-label={nameByKind(block)}
           title="Select or drag to reorder"
           draggable
-          onDragStart={(event) => {
-            event.dataTransfer.setData(dragType, block.id);
-            event.dataTransfer.effectAllowed = "move";
-          }}
+          onDragStart={(event) =>
+            beginDrag(event, { kind: "existing", id: block.id })
+          }
+          onDragEnd={endDrag}
           onKeyDown={(event) => {
             if (event.key === "F9") {
               event.preventDefault();
@@ -1649,6 +2166,29 @@ function BlockCard({
             <button disabled={index + 1 === count} onClick={() => move(1)}>
               Move down
             </button>
+            <select
+              aria-label="Move block to stack"
+              value=""
+              onChange={(event) => {
+                if (event.target.value)
+                  moveBlock(
+                    block.id,
+                    JSON.parse(event.target.value) as ListAddress,
+                  );
+              }}
+            >
+              <option value="">Move to end of stack</option>
+              {stackDestinations(blueprint, block.id, signals).map(
+                ({ address, name }) => (
+                  <option
+                    key={JSON.stringify(address)}
+                    value={JSON.stringify(address)}
+                  >
+                    {name}
+                  </option>
+                ),
+              )}
+            </select>
             <button
               onClick={() =>
                 editBlueprint((draft) => {
@@ -2388,6 +2928,110 @@ function AdvancedFields({
   replace: (block: Block) => void;
 }) {
   switch (block.kind) {
+    case "runtimeWrite": {
+      const field = runtimeField(block.member);
+      return (
+        <>
+          <RuntimeMemberSelect
+            label="Writable property"
+            members={writable}
+            member={block.member}
+            change={(member) =>
+              replace({
+                ...block,
+                member,
+                value: initialField(runtimeField(member)!),
+              })
+            }
+          />
+          <TargetChoice
+            target={block.target}
+            set={(target) => replace({ ...block, target })}
+            render={(target) =>
+              expression(
+                "Entity",
+                target,
+                (target) => replace({ ...block, target }),
+                "entity",
+              )
+            }
+          />
+          {field?.options && block.value.kind === "literal" && (
+            <EffectChoice
+              label="Property option"
+              value={String(block.value.value)}
+              options={field.options.map((id) => ({ id, name: id }))}
+              change={(value) => replace({ ...block, value: literal(value) })}
+            />
+          )}
+          {expression(
+            "Property value",
+            block.value,
+            (value) => replace({ ...block, value }),
+            field?.type,
+          )}
+        </>
+      );
+    }
+    case "runtimeAction": {
+      const operation = runtimeOperation(block.member);
+      return (
+        <>
+          <RuntimeMemberSelect
+            label="System operation"
+            members={actions}
+            member={block.member}
+            change={(member) => {
+              const operation = runtimeOperation(member)!;
+              replace({
+                ...block,
+                member,
+                args: operationArguments(operation),
+                result: undefined,
+                target: operation.scope === "entity" ? block.target : undefined,
+              });
+            }}
+          />
+          {operation?.scope === "entity" && (
+            <TargetChoice
+              target={block.target}
+              set={(target) => replace({ ...block, target })}
+              render={(target) =>
+                expression(
+                  "Entity",
+                  target,
+                  (target) => replace({ ...block, target }),
+                  "entity",
+                )
+              }
+            />
+          )}
+          {operation && (
+            <RuntimeArgs
+              operation={operation}
+              args={block.args}
+              change={(args) => replace({ ...block, args })}
+              render={(label, node, change, type) =>
+                expression(label, node, change, type)
+              }
+            />
+          )}
+          {operation?.result && (
+            <EffectChoice
+              label="Store result"
+              value={block.result ?? ""}
+              options={[
+                { id: "", name: "Discard result" },
+                ...variables.filter(({ type }) => type === operation.result),
+              ]}
+              change={(result) =>
+                replace({ ...block, result: result || undefined })
+              }
+            />
+          )}
+        </>
+      );
+    }
     case "screen":
       return (
         <ScreenBlockFields
@@ -2810,9 +3454,196 @@ export function BlueprintWorkspace() {
   );
 }
 
+const blockGroups: Partial<Record<BlockKind, string>> = {
+  set: "Variables",
+  let: "Variables",
+  writeGlobal: "Data",
+  saveSlot: "Data",
+  language: "Data",
+  property: "Transforms",
+  move: "Physics",
+  animate: "Animation",
+  animationParameter: "Animation",
+  timeline: "Animation",
+  tween: "Animation",
+  particles: "Particles",
+  sound: "Audio",
+  screen: "Interface",
+  ui: "Interface",
+  sceneFlow: "Scene Flow",
+  emit: "Events",
+  log: "Debug",
+};
 export function LibraryPanel() {
   const [search, setSearch] = useState("");
-  const hasBlueprint = useEditor((state) => Boolean(selectedBlueprint(state)));
+  const selectedGetter = useGetter((state) => state.label);
+  useEffect(
+    () => () => useGetter.setState({ item: undefined, label: undefined }),
+    [],
+  );
+  const blueprint = useEditor(selectedBlueprint);
+  const state = useEditor((state) => state.eventId);
+  const project = useEditor((state) => state.project);
+  const event = blueprint && activeEvent(blueprint, state);
+  let variables: Variable[] = [];
+  if (blueprint && event)
+    variables = variablesAt(
+      blueprint,
+      { eventId: event.id },
+      project.signals ?? emptySignals,
+    );
+  type Row = {
+    key: string;
+    name: string;
+    description: string;
+    group: string;
+    tone: string;
+    Icon: typeof Zap;
+    data: TileDrag;
+  };
+  const rows: Row[] = [
+    ...Object.entries(kinds)
+      .filter(([id]) => !id.startsWith("runtime"))
+      .map(([key, info]) => ({
+        ...info,
+        key,
+        group: blockGroups[key as BlockKind] ?? "Logic",
+        data: { kind: "new" as const, tile: key as BlockKind },
+      })),
+    ...readable.map(({ id, group, name, type }) => ({
+      key: "read:" + id,
+      group,
+      name: "Get " + name,
+      description: id + " " + type,
+      tone: "blue",
+      Icon: VariableIcon,
+      data: { kind: "read" as const, member: id },
+    })),
+    ...writable.map(({ id, group, name, type }) => ({
+      key: "write:" + id,
+      group,
+      name: "Set " + name,
+      description: id + " " + type,
+      tone: "green",
+      Icon: Settings2,
+      data: { kind: "new" as const, tile: "runtimeWrite" as const, member: id },
+    })),
+    ...actions.map(({ id, group, name }) => ({
+      key: "action:" + id,
+      group,
+      name,
+      description: id,
+      tone: "green",
+      Icon: Zap,
+      data: {
+        kind: "new" as const,
+        tile: "runtimeAction" as const,
+        member: id,
+      },
+    })),
+    {
+      key: "variable",
+      group: "Variables",
+      name: "Get Variable",
+      description: "Read a local or instance variable in this slot's scope.",
+      tone: "blue",
+      Icon: VariableIcon,
+      data: { kind: "variable" },
+    },
+    ...variables.map(({ id, name, type }) => ({
+      key: "variable:" + id,
+      group: "Variables",
+      name: "Get " + name,
+      description: type + " variable",
+      tone: "blue",
+      Icon: VariableIcon,
+      data: { kind: "variable" as const, id },
+    })),
+    ...(project.data?.globals ?? []).map(({ id, name, initial }) => ({
+      key: "global:" + id,
+      group: "Data",
+      name: "Get " + name,
+      description: typeOf(initial) + " global",
+      tone: "blue",
+      Icon: Database,
+      data: { kind: "global" as const, id },
+    })),
+    ...(project.extensions ?? []).flatMap((extension) =>
+      extension.functions.map((fn) => ({
+        key: "extension:" + extension.id + ":" + fn.id,
+        group: "Extensions",
+        name: fn.name,
+        description: extension.name + " " + fn.result,
+        tone: "blue",
+        Icon: Code2,
+        data: {
+          kind: "value" as const,
+          type: fn.result,
+          expression: {
+            kind: "extension" as const,
+            extensionId: extension.id,
+            functionId: fn.id,
+            args: Object.fromEntries(
+              fn.parameters.map(({ id, type }) => [
+                id,
+                literal(defaultValue[type]),
+              ]),
+            ),
+          },
+        },
+      })),
+    ),
+    ...(
+      ["sheet", "resource", "slot", "translation", "locale"] as const
+    ).flatMap((source) => {
+      const catalog = project.data ?? emptyCatalog;
+      const index = indexCatalog(catalog);
+      const entries =
+        source === "locale"
+          ? [{ id: "", name: "Current language" }]
+          : dataEntries(catalog, source);
+      return entries.flatMap(({ id, name }) => {
+        const type = index.readType(source, id);
+        if (!type) return [];
+        return [
+          {
+            key: "data:" + source + ":" + id,
+            group: "Data",
+            name: "Get " + name,
+            description: source + " " + type,
+            tone: "blue",
+            Icon: Database,
+            data: {
+              kind: "value" as const,
+              type,
+              expression: {
+                kind: "data" as const,
+                source,
+                id,
+                type,
+                ...(source === "sheet" ? { key: literal("") } : {}),
+              },
+            },
+          },
+        ];
+      });
+    }),
+    ...project.input.map(({ id, name }) => ({
+      key: "axis:" + id,
+      group: "Input",
+      name: "Read " + name,
+      description: "Input axis",
+      tone: "blue",
+      Icon: Gamepad2,
+      data: { kind: "axis" as const, id },
+    })),
+  ];
+  const query = search.trim().toLowerCase();
+  const groups = groupItems(
+    rows.filter(({ name, group, description }) =>
+      [name, group, description].join(" ").toLowerCase().includes(query),
+    ),
+  );
   return (
     <div className="panel-body library-panel">
       <input
@@ -2821,25 +3652,56 @@ export function LibraryPanel() {
         value={search}
         onChange={(event) => setSearch(event.target.value)}
       />
-      {Object.entries(kinds)
-        .filter(([, info]) =>
-          (info.name + " " + info.description)
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-        )
-        .map(([kind, info]) => (
+      {selectedGetter && (
+        <div className="getter-selection" role="status">
+          <small>Choose a compatible value for {selectedGetter}.</small>
           <button
-            className={`library-row ${info.tone}`}
-            disabled={!hasBlueprint}
-            key={kind}
-            title={info.description}
-            onClick={() => addBlock(kind as BlockKind)}
+            onClick={() =>
+              useGetter.setState({ item: undefined, label: undefined })
+            }
           >
-            <info.Icon size={17} />
-            {info.name}
-            <Plus size={14} />
+            Cancel getter
           </button>
-        ))}
+        </div>
+      )}
+      {[...groups].map(([group, items]) => (
+        <details
+          key={group + String(!!query)}
+          open={query ? true : group === "Logic" || group === "Variables"}
+          className="library-category"
+        >
+          <summary>{group}</summary>
+          {items.map(({ key, name, description, tone, Icon, data }) => (
+            <button
+              key={key}
+              draggable={!!event}
+              className={`library-row ${tone}`}
+              disabled={!event}
+              title={description}
+              onDragStart={(event) => beginDrag(event, data)}
+              onDragEnd={endDrag}
+              aria-pressed={
+                data.kind === "new" ? undefined : selectedGetter === name
+              }
+              onClick={() => {
+                if (data.kind === "new")
+                  addBlock(data.tile, undefined, undefined, data.member);
+                else if (data.kind !== "existing")
+                  useGetter.setState({ item: data, label: name });
+              }}
+            >
+              <Icon size={16} />
+              <span>{name}</span>
+              {data.kind === "new" ? (
+                <Plus size={13} />
+              ) : (
+                <ChevronRight size={13} />
+              )}
+            </button>
+          ))}
+        </details>
+      ))}
+      {!groups.size && <small>No matching blocks.</small>}
     </div>
   );
 }
@@ -3045,7 +3907,11 @@ export function symbolName(blueprint: Blueprint | undefined, id: string) {
     if ("parameters" in entry) {
       const parameter = entry.parameters.find((item) => item.id === id);
       if (parameter) return parameter.name;
-    } else if (entry.id === id && entry.kind === "signal") return "payload";
+    } else if (
+      entry.id === id &&
+      (entry.kind === "signal" || entry.kind === "runtime")
+    )
+      return "payload";
     const local = findBlock(entry.blocks, id)?.block;
     if (local?.kind === "let") return local.name;
   }
@@ -3077,13 +3943,20 @@ function EntryInspector({
   function addEvent(value: string) {
     if (!value) return;
     const id = newId();
-    const kind = value === "start" || value === "update" ? value : "signal";
+    const kind =
+      value === "start" || value === "update"
+        ? value
+        : value.startsWith("runtime:")
+          ? "runtime"
+          : "signal";
     editBlueprint((draft) => {
       draft.version = 2;
       draft.events.push({
         id,
         kind,
-        ...(kind === "signal" ? { signalId: value.slice(7) } : {}),
+        ...(kind === "signal" || kind === "runtime"
+          ? { signalId: value.slice(value.indexOf(":") + 1) }
+          : {}),
         blocks: [],
       });
     });
@@ -3133,6 +4006,11 @@ function EntryInspector({
           <option value="">+ Event Handler</option>
           <option value="start">On Start</option>
           <option value="update">Update (Every Frame)</option>
+          {runtimeEvents.map(({ id, name }) => (
+            <option key={id} value={"runtime:" + id}>
+              {name}
+            </option>
+          ))}
           {signals.map((signal) => (
             <option key={signal.id} value={"signal:" + signal.id}>
               {signal.name}

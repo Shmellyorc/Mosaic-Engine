@@ -107,6 +107,12 @@ export type Expression =
       value: Expression;
     }
   | { kind: "property"; property: Property; target?: Expression }
+  | {
+      kind: "runtimeRead";
+      member: string;
+      target?: Expression;
+      args?: Record<string, Expression>;
+    }
   | { kind: "exists"; reference: Expression }
   | { kind: "toText"; value: Expression }
   | { kind: "vector"; x: Expression; y: Expression }
@@ -133,6 +139,12 @@ export type Expression =
     };
 export const expressionSchema: z.ZodType<Expression> = z.lazy(() =>
   z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("runtimeRead"),
+      member: id,
+      target: expressionSchema.optional(),
+      args: z.record(id, expressionSchema).optional(),
+    }),
     z.object({ kind: z.literal("literal"), value }),
     z.object({ kind: z.literal("variable"), id }),
     z.object({ kind: z.literal("input"), id }),
@@ -249,6 +261,19 @@ export const uiValueTypeSchema = z.enum(["string", "boolean", "number"]);
 export type UiProperty = z.infer<typeof uiPropertySchema>;
 
 type BlockData =
+  | {
+      kind: "runtimeWrite";
+      member: string;
+      target?: Expression;
+      value: Expression;
+    }
+  | {
+      kind: "runtimeAction";
+      member: string;
+      target?: Expression;
+      args: Record<string, Expression>;
+      result?: string;
+    }
   | { kind: "set"; variable: string; value: Expression }
   | { kind: "let"; name: string; type: ValueType; value: Expression }
   | { kind: "if"; condition: Expression; then: Block[]; else: Block[] }
@@ -311,6 +336,21 @@ export type Block = { id: string } & BlockData;
 const blocks = () => z.array(blockSchema).max(500);
 const blockSchema: z.ZodType<Block> = z.lazy(() =>
   z.discriminatedUnion("kind", [
+    z.object({
+      id,
+      kind: z.literal("runtimeWrite"),
+      member: id,
+      target: expressionSchema.optional(),
+      value: expressionSchema,
+    }),
+    z.object({
+      id,
+      kind: z.literal("runtimeAction"),
+      member: id,
+      target: expressionSchema.optional(),
+      args: z.record(id, expressionSchema),
+      result: id.optional(),
+    }),
     z.object({
       id,
       kind: z.literal("set"),
@@ -459,7 +499,7 @@ const functionSchema = z.object({
 });
 const eventSchema = z.object({
   id,
-  kind: z.enum(["start", "update", "signal"]),
+  kind: z.enum(["start", "update", "signal", "runtime"]),
   signalId: id.optional(),
   blocks: blocks(),
 });

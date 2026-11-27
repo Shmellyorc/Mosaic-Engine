@@ -1,4 +1,12 @@
 import {
+  runtimeField,
+  runtimeOperation,
+  runtimeEvent,
+  runtimeEventChannel,
+  runtimeRecordMembers,
+  type RuntimeOperation,
+} from "./runtime-catalog";
+import {
   extensionBody,
   extensionSchema,
   type ExtensionManifest,
@@ -41,6 +49,13 @@ export type BlueprintContext = {
     slot(id: string, operation: "save" | "load"): void;
     language(locale: string): void;
   };
+  runtimeRead?(member: string, target?: string): Value;
+  runtimeWrite?(member: string, value: Value, target?: string): void;
+  runtimeInvoke?(
+    member: string,
+    args: ReadonlyMap<string, Value>,
+    target?: string,
+  ): Value | undefined;
   effect?(command: EffectCommand): void;
   sceneFlow?(operation: SceneOperation, target: string, route: boolean): void;
   screen?(action: ScreenAction, target: string, layerId?: string): void;
@@ -201,6 +216,32 @@ export function compileBlueprint(
       report(variable.id, "Initial value has the wrong type.");
   }
 
+  function runtimeArguments(
+    operation: RuntimeOperation,
+    args: Record<string, Expression>,
+    id: string,
+    scope: CompileScope,
+  ) {
+    for (const key of Object.keys(args))
+      if (!Object.hasOwn(operation.args, key))
+        report(id, "Unknown argument " + key + ".");
+    const reads = Object.entries(operation.args).flatMap(([key, argument]) => {
+      const value = Object.hasOwn(args, key) ? args[key] : undefined;
+      if (!value) {
+        report(id, "Missing argument " + argument.name + ".");
+        return [];
+      }
+      if (
+        argument.choices &&
+        value.kind === "literal" &&
+        !argument.choices.includes(String(value.value))
+      )
+        report(id, "Choose a valid " + argument.name + ".");
+      return [[key, field(value, id, scope, argument.type)] as const];
+    });
+    return (context: BlueprintContext, locals: Scope) =>
+      new Map(reads.map(([key, read]) => [key, read(context, locals)]));
+  }
   function expression(
     node: Expression,
     id: string,
@@ -294,6 +335,42 @@ export function compileBlueprint(
           type: node.query === "scene" ? "string" : "entity",
           read: (ctx) => ctx.query(node.query),
         };
+      case "runtimeRead": {
+        const member = runtimeField(node.member);
+        const operation = runtimeOperation(node.member);
+        const target = node.target && field(node.target, id, scope, "entity");
+        if (member)
+          return {
+            type: member.type,
+            read: (ctx, locals) => {
+              if (!ctx.runtimeRead)
+                return fault("Runtime properties are unavailable.");
+              return ctx.runtimeRead(
+                node.member,
+                target && entityId(target(ctx, locals)),
+              );
+            },
+          };
+        if (!operation?.result || operation.id === "entity.spawn") {
+          report(id, "Choose a readable runtime property or operation.");
+          return {
+            type: "number",
+            read: () => fault("Reader is unavailable."),
+          };
+        }
+        if (target && operation.scope === "scene")
+          report(id, "This operation uses the scene context.");
+        const args = runtimeArguments(operation, node.args ?? {}, id, scope);
+        return {
+          type: operation.result,
+          read: (ctx, locals) =>
+            ctx.runtimeInvoke?.(
+              node.member,
+              args(ctx, locals),
+              target && entityId(target(ctx, locals)),
+            ) ?? fault("Runtime reader is unavailable."),
+        };
+      }
       case "property": {
         const target = node.target && field(node.target, id, scope, "entity");
         return {
@@ -345,6 +422,17 @@ export function compileBlueprint(
       case "field": {
         const record = field(node.record, id, scope, "record");
         if (!node.key.trim()) report(id, "Enter the name of a record field.");
+        if (
+          node.record.kind === "runtimeRead" &&
+          Object.hasOwn(runtimeRecordMembers, node.record.member)
+        ) {
+          const columns = runtimeRecordMembers[node.record.member];
+          if (
+            !Object.hasOwn(columns, node.key) ||
+            columns[node.key] !== node.type
+          )
+            report(id, "Choose a field of the runtime record type.");
+        }
         if (node.record.kind === "data") {
           const columns = data?.fields(node.record.source, node.record.id);
           if (columns && columns.get(node.key) !== node.type)
@@ -510,6 +598,55 @@ export function compileBlueprint(
       field(node, block.id, scope, type);
     const error = (message: string) => report(block.id, message);
     switch (block.kind) {
+      case "runtimeWrite": {
+        const member = runtimeField(block.member);
+        if (!member?.writable) error("Choose a writable runtime property.");
+        const value = read(block.value, member?.type);
+        const target = block.target && read(block.target, "entity");
+        return function* (ctx, locals) {
+          if (!ctx.runtimeWrite)
+            return fault("Runtime properties are unavailable.");
+          ctx.runtimeWrite(
+            block.member,
+            value(ctx, locals),
+            target && entityId(target(ctx, locals)),
+          );
+        };
+      }
+      case "runtimeAction": {
+        const operation = runtimeOperation(block.member);
+        if (
+          !operation ||
+          (operation.result && operation.id !== "entity.spawn")
+        ) {
+          error("Choose a runtime action.");
+          return function* () {};
+        }
+        const args = runtimeArguments(operation, block.args, block.id, scope);
+        const target = block.target && read(block.target, "entity");
+        if (target && operation.scope === "scene")
+          error("This action uses the scene context.");
+        if (
+          block.result &&
+          (!operation.result ||
+            scope.types.get(block.result) !== operation.result)
+        )
+          error("Choose a result variable of the declared type.");
+        return function* (ctx, locals) {
+          if (!ctx.runtimeInvoke)
+            return fault("Runtime actions are unavailable.");
+          const value = ctx.runtimeInvoke(
+            block.member,
+            args(ctx, locals),
+            target && entityId(target(ctx, locals)),
+          );
+          if (block.result && value !== undefined)
+            (lookup(locals, block.result) ?? ctx.variables).set(
+              block.result,
+              value,
+            );
+        };
+      }
       case "if": {
         const condition = read(block.condition, "boolean");
         const yes = list(block.then, scope);
@@ -825,7 +962,11 @@ export function compileBlueprint(
   }
   const entries = blueprint.events.map((event) => {
     register(event.id);
-    const signal = event.signalId ? signalsById.get(event.signalId) : undefined;
+    const signal = event.signalId
+      ? event.kind === "runtime"
+        ? runtimeEvent(event.signalId)
+        : signalsById.get(event.signalId)
+      : undefined;
     const name =
       event.kind === "start"
         ? "On Start"
@@ -833,7 +974,7 @@ export function compileBlueprint(
           ? "Update"
           : (signal?.name ?? "Missing event");
     const types = new Map(variables);
-    if (event.kind === "signal") {
+    if (event.kind === "signal" || event.kind === "runtime") {
       if (!signal)
         report(event.id, "Choose an existing scene event to listen for.");
       if (signal && signal.type !== "void") types.set(event.id, signal.type);
@@ -841,11 +982,17 @@ export function compileBlueprint(
     const instructions = list(event.blocks, { types, loop: false });
     return {
       id: event.id,
-      kind: event.kind,
-      signalId: event.signalId,
+      kind: event.kind === "runtime" ? ("signal" as const) : event.kind,
+      signalId:
+        event.kind === "runtime" && event.signalId
+          ? runtimeEventChannel(event.signalId)
+          : event.signalId,
       begin(ctx: BlueprintContext, value?: Value) {
         const scope = local();
-        if (value !== undefined && event.kind === "signal")
+        if (
+          value !== undefined &&
+          (event.kind === "signal" || event.kind === "runtime")
+        )
           scope.locals.set(event.id, value);
         return execute(diagnostics.length ? [] : instructions, ctx, scope, {
           entryId: event.id,

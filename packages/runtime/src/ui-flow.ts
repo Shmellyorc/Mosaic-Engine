@@ -229,15 +229,8 @@ export class UiFlowWorld {
       if (item.closing && !item.shown) this.remove(item);
     }
   }
-  setWidget(
-    legacy: UiWorld,
-    id: string,
-    property: Parameters<UiWorld["set"]>[1],
-    value?: Value,
-    screen?: string,
-    scene?: string,
-  ) {
-    if (!screen && legacy.has(id)) return legacy.set(id, property, value);
+  widgetWorld(legacy: UiWorld, id: string, screen?: string, scene?: string) {
+    if (!screen && legacy.has(id)) return legacy;
     const candidates = [...this.instances.values()].filter(
       (item) =>
         !item.closing &&
@@ -247,7 +240,25 @@ export class UiFlowWorld {
     );
     if (candidates.length !== 1)
       throw new Error("Choose a visible screen with an unambiguous widget.");
-    candidates[0].world.set(id, property, value);
+    return candidates[0].world;
+  }
+  setWidget(
+    legacy: UiWorld,
+    id: string,
+    property: Parameters<UiWorld["set"]>[1],
+    value?: Value,
+    screen?: string,
+    scene?: string,
+  ) {
+    this.widgetWorld(legacy, id, screen, scene).set(id, property, value);
+  }
+  screenOpen(id: string, scene: string) {
+    return [...this.instances.values()].some(
+      (item) =>
+        item.id === id &&
+        !item.closing &&
+        (item.owner === null || item.owner === scene),
+    );
   }
   views(legacy: UiWorld): UiScreenView[] {
     const layers = this.definition?.layers;

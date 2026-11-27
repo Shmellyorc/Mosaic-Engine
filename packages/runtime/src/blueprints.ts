@@ -133,6 +133,9 @@ export class BlueprintScheduler {
       if (!this.updating.get(binding)?.has(entry)) this.enqueue(binding, entry);
     }
   }
+  listens(signal: string) {
+    return this.listeners.has(signal);
+  }
   queueContact(signalId: string, entityId: string, payload?: Value) {
     if (
       this.listeners.has(signalId) &&

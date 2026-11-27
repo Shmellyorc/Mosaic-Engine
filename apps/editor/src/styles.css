@@ -2350,3 +2350,41 @@ button.tree-row {
   gap: 4px;
   margin-bottom: 4px;
 }
+
+.library-category > summary {
+  cursor: pointer;
+  padding: 6px 4px;
+  color: var(--muted);
+}
+.library-category > summary:hover {
+  color: var(--ink);
+}
+.library-row[draggable="true"] {
+  cursor: grab;
+}
+.library-row > span {
+  flex: 1;
+  text-align: start;
+}
+.card-list[data-drop-ready="true"] {
+  box-shadow: inset 0 0 0 2px #9c7bf2;
+  background-color: #9c7bf212;
+}
+.logic-card[data-drop-ready="true"] {
+  box-shadow: 0 -3px 0 #9c7bf2;
+}
+.expression[data-drop-ready="true"] > .expression-summary {
+  outline: 2px solid #82baf0;
+  background-color: #82baf02b;
+}
+.runtime-argument .expression > .expression-summary {
+  min-width: 7rem;
+}
+.expression[data-getter-ready="true"] > .expression-summary {
+  outline: 1px dashed #82baf0;
+}
+.getter-selection {
+  margin: 6px 0;
+  display: grid;
+  gap: 4px;
+}

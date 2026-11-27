@@ -49,6 +49,9 @@ export class BehaviorRunner {
       blackboard: Object.fromEntries(this.blackboard),
     };
   }
+  read(key: string) {
+    return this.blackboard.get(key);
+  }
   write(key: string, value: Value) {
     const current = this.blackboard.get(key);
     if (current === undefined || typeOf(current) !== typeOf(value))

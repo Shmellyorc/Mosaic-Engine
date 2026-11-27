@@ -84,6 +84,7 @@ export class PhysicsWorld {
   private index = new SpatialGrid<BodyState>();
   private candidates = new Set<BodyState>();
   private watched: BodyState[] = [];
+  private monitorRuntime = false;
   private contacts = new Map<number, [BodyState, BodyState]>();
   private tileContacts = new Set<BodyState>();
   constructor(
@@ -136,6 +137,18 @@ export class PhysicsWorld {
           this.tileContacts.add(state);
       }
     }
+  }
+  setGravity(gravity: Scene["gravity"]) {
+    this.gravity = gravity;
+  }
+  watchRuntimeContacts(enabled: boolean) {
+    this.monitorRuntime = enabled;
+  }
+  velocity(id: string, axis: "x" | "y", value?: number) {
+    const state = this.states.get(id);
+    if (!state) throw new Error("The entity has no simulated body.");
+    if (value !== undefined) state.velocity[axis] = value;
+    return state.velocity[axis];
   }
   request(id: string, x: number, y: number) {
     const state = this.states.get(id);
@@ -202,7 +215,7 @@ export class PhysicsWorld {
       movement.y = 0;
       this.index.update(state, bodyRect(entity));
     }
-    if (!this.watched.length) return;
+    if (!this.watched.length && !this.monitorRuntime) return;
     for (const state of this.states.values()) {
       const end = bodyRect(state.entity);
       this.index.update(state, sweep(state.start, end.x, end.y));
@@ -210,7 +223,9 @@ export class PhysicsWorld {
     const tileContacts = new Set<BodyState>();
     const contacts = new Map<number, [BodyState, BodyState]>();
     const size = this.states.size;
-    for (const state of this.watched) {
+    for (const state of this.monitorRuntime
+      ? this.states.values()
+      : this.watched) {
       const finish = bodyRect(state.entity);
       const area = sweep(state.start, finish.x, finish.y);
       this.tiles.solids(

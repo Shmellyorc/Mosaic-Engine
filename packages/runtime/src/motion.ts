@@ -94,6 +94,17 @@ export class AnimationPlayer {
       }
     }
   }
+  readParameter(id: string) {
+    const value = this.parameters.get(id);
+    if (value === undefined) throw new Error("Animation parameter is missing.");
+    return value;
+  }
+  get clipName() {
+    return this.clip?.name ?? "";
+  }
+  get elapsed() {
+    return this.clipTime;
+  }
   get stateId() {
     return this.state;
   }
@@ -202,6 +213,19 @@ export class MotionWorld {
       this.active.set(id, { definition, elapsed: 0 });
       this.seek(id, 0);
     }
+  }
+  status(id: string) {
+    const timeline = this.timelines.get(id);
+    if (!timeline) throw new Error("Timeline is missing from this scene.");
+    const playback = this.active.get(id);
+    return {
+      playing: !!playback,
+      elapsed: playback?.elapsed ?? 0,
+      duration: timeline.duration,
+      loop: timeline.loop,
+      autoplay: timeline.autoplay,
+      name: timeline.name,
+    };
   }
   seek(id: string, seconds: number) {
     const timeline = this.timelines.get(id);

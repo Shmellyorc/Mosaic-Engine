@@ -1,8 +1,6 @@
 import { z } from "zod";
 import {
   blueprintSchema,
-  children as blockChildren,
-  type Block,
   blueprintValueSchema,
   typeOf,
   extensionSchema,
@@ -692,13 +690,19 @@ export function parseProject(source: string): Project {
   }
   return validateProject(value);
 }
-function usesFlowBlock(blocks: Block[]): boolean {
-  return blocks.some(
-    (block) =>
-      block.kind === "sceneFlow" ||
-      block.kind === "screen" ||
-      blockChildren(block).some(({ blocks }) => usesFlowBlock(blocks)),
-  );
+function usesRuntimeBlueprintValue(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const kind = (value as { kind?: string }).kind;
+  if (
+    kind === "sceneFlow" ||
+    kind === "screen" ||
+    kind === "runtimeRead" ||
+    kind === "runtimeWrite" ||
+    kind === "runtimeAction" ||
+    kind === "runtime"
+  )
+    return true;
+  return Object.values(value).some(usesRuntimeBlueprintValue);
 }
 
 export function serializeProject(project: Project): string {
@@ -734,8 +738,8 @@ export function serializeProject(project: Project): string {
       ({ requires, variables, events, functions }) =>
         !!requires?.length ||
         variables.some(({ exposed }) => exposed) ||
-        events.some(({ blocks }) => usesFlowBlock(blocks)) ||
-        functions?.some(({ blocks }) => usesFlowBlock(blocks)),
+        events.some(usesRuntimeBlueprintValue) ||
+        functions?.some(usesRuntimeBlueprintValue),
     );
   const source = JSON.stringify(
     validateProject(

@@ -69,6 +69,38 @@ export class TileGrid {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return undefined;
     return this.load(this.chunkKey(x, y))?.get(y * this.width + x);
   }
+  write(x: number, y: number, tile?: Tile) {
+    if (
+      !Number.isInteger(x) ||
+      !Number.isInteger(y) ||
+      x < 0 ||
+      x >= this.width ||
+      y < 0 ||
+      y >= this.height
+    )
+      throw new Error("Tile coordinates are outside the layer.");
+    const key = this.chunkKey(x, y);
+    const chunk = this.chunks.get(key) ?? [];
+    const index = chunk.findIndex((cell) => cell.x === x && cell.y === y);
+    if (index < 0 && !tile) return;
+    if (index >= 0) chunk.splice(index, 1);
+    if (tile) chunk.push(tile);
+    if (chunk.length) this.chunks.set(key, chunk);
+    else this.chunks.delete(key);
+    this.loaded.delete(key);
+    this.lastKey = -1;
+    this.lastChunk = undefined;
+    for (const [dx, dy] of [
+      [0, 0],
+      [-1, 0],
+      [0, -1],
+      [1, 0],
+      [0, 1],
+    ]) {
+      const neighbor = this.at(x + dx, y + dy);
+      if (neighbor) this.masks.delete(neighbor);
+    }
+  }
   forArea(rect: Rect, use: (tile: Tile) => void) {
     if (!this.chunks.size) return;
     const s = this.size;
@@ -145,16 +177,24 @@ export class TileWorld {
     readonly map: Scene["tilemap"],
     private enabled: (layerId: string) => boolean = () => true,
     sources: TileSource[] = [],
+    previous?: TileWorld,
   ) {
     const grid = (tiles: Tile[]) =>
       new TileGrid(map.width, map.height, map.size, tiles);
-    this.legacy = grid(map.tiles);
-    this.layers = (map.layers ?? []).map((definition) => ({
-      definition,
-      grid: grid(definition.tiles),
-    }));
+    const reusable = (source: Scene["tilemap"]) =>
+      previous?.map === source
+        ? previous
+        : previous?.parts.find(({ world }) => world.map === source)?.world;
+    const existing = reusable(map);
+    this.legacy = existing?.legacy ?? grid(map.tiles);
+    this.layers =
+      existing?.layers ??
+      (map.layers ?? []).map((definition) => ({
+        definition: { ...definition },
+        grid: grid(definition.tiles),
+      }));
     this.parts = sources.map(({ map, offset, layerIndex }) => ({
-      world: new TileWorld(map, enabled),
+      world: new TileWorld(map, enabled, [], reusable(map)),
       offset,
       layerIndex,
     }));
@@ -180,6 +220,20 @@ export class TileWorld {
     this.terrains = new Map(
       (map.terrains ?? []).map((terrain) => [terrain.id, terrain]),
     );
+  }
+  layer(id: string) {
+    const local = this.parts.length
+      ? this.parts.map(({ world }) => world)
+      : [this];
+    for (const world of local) {
+      if (!id) return { world, grid: world.legacy, definition: undefined };
+      const named = world.layers.find(({ definition }) => definition.id === id);
+      if (named) return { world, ...named };
+    }
+    throw new Error("Tile layer is missing from the loaded world.");
+  }
+  terrainById(id: string) {
+    return this.terrains.get(id);
   }
   terrain(tile: Tile) {
     return tile.terrainId ? this.terrains.get(tile.terrainId) : undefined;
