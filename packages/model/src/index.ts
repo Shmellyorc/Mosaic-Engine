@@ -18,6 +18,8 @@ import {
 } from "./effects";
 import { catalogSchema, validateCatalog } from "./data";
 import { uiSchema, validateUi } from "./ui";
+import { uiFlowSchema, validateUiFlow } from "./ui-flow";
+export * from "./ui-flow";
 import { sceneFlowSchema } from "./scene-flow";
 export * from "./scene-flow";
 export * from "./ui";
@@ -286,6 +288,7 @@ const projectSchema = z.object({
   height: dimension,
   startSceneId: id,
   sceneFlow: sceneFlowSchema.optional(),
+  uiFlow: uiFlowSchema.optional(),
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
@@ -439,6 +442,8 @@ export function validateProject(input: unknown): Project {
         throw new Error(`Sound "${sound.name}" has a missing audio bus.`);
     }
   }
+  if (project.uiFlow)
+    validateUiFlow(project.uiFlow, sceneIds, assetIds, signals);
   if (project.sceneFlow) {
     idsOf(project.sceneFlow.routes, "scene route");
     const triggers = new Map<string, Set<string | null>>();
@@ -684,6 +689,7 @@ export function serializeProject(project: Project): string {
       ),
     ) ||
     !!project.sceneFlow ||
+    !!project.uiFlow ||
     project.blueprints.some(
       ({ requires, variables }) =>
         !!requires?.length || variables.some(({ exposed }) => exposed),

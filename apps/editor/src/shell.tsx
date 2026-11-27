@@ -61,6 +61,7 @@ import { UiInspector } from "./ui-inspector";
 import { selectedWidget } from "./ui-author";
 import { GamePreview, SceneViewport } from "./viewport";
 import { documentInfo, editors } from "./documents";
+import { UiFlowWorkspace } from "./ui-flow";
 import { SceneFlowWorkspace } from "./scene-flow";
 import { DocumentTabs, LocalTools, PrefabDocument } from "./document-view";
 import {
@@ -133,6 +134,7 @@ function WorkspacePanel() {
   const project = useEditor((state) => state.project);
   if (!ref || !documentInfo(project, ref))
     return <div className="panel-body muted">Open a file from Project.</div>;
+  if (ref.kind === "uiFlow") return <UiFlowWorkspace />;
   if (ref.kind === "sceneFlow") return <SceneFlowWorkspace />;
   if (ref.kind === "image") return <Assets />;
   if (ref.kind === "prefab") return <PrefabDocument key={ref.id} />;
@@ -152,7 +154,7 @@ function WorkspacePanel() {
   if (workspace === "UI")
     return (
       <LocalTools
-        key="ui-hierarchy"
+        key={ref.id}
         title="UI Hierarchy"
         storageKey="ui-hierarchy"
         tool={<UiHierarchy />}

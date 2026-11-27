@@ -60,6 +60,10 @@ export class UiWorld {
         this.focusRequest = previous.focusRequest;
     }
   }
+  has(id: string) {
+    return this.widgets.has(id);
+  }
+
   get revision() {
     return this.changed + this.data.revision;
   }

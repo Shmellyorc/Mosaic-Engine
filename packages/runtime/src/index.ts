@@ -1,8 +1,10 @@
 import { SceneWorld, type SceneCommand } from "./scene-flow";
 export type { SceneCommand } from "./scene-flow";
+import { UiFlowWorld, type UiCommand } from "./ui-flow";
+export type { UiCommand, UiScreenView } from "./ui-flow";
 import { UiWorld } from "./ui";
 export { UiWorld } from "./ui";
-export { mountGameUi } from "./ui-dom";
+export { mountGameUi, mountUiStack } from "./ui-dom";
 import { GameData, type SlotStorage } from "./data";
 export {
   GameData,
@@ -306,6 +308,7 @@ export class Game {
   readonly input: InputState;
   readonly data: GameData;
   ui: UiWorld;
+  private screens: UiFlowWorld;
   readonly logs: RuntimeLog[] = [];
   scene: Scene;
   private scheduler: BlueprintScheduler;
@@ -384,6 +387,13 @@ export class Game {
     this.data = new GameData(project.id, project.data, slots);
     this.tiles = this.createTiles(scene);
     this.scheduler = new BlueprintScheduler(STEP, debug);
+    this.screens = new UiFlowWorld(
+      this.data,
+      (id, value, screen, source) =>
+        this.handleUiSignal(id, value, screen, source),
+      project.uiFlow,
+    );
+    this.screens.refresh(project.uiFlow, scene.id, [scene.id]);
     this.ui = this.createUi(scene);
     this.assets = new Set(project.assets.map((asset) => asset.id));
     this.signals = project.signals ?? emptySignals;
@@ -435,15 +445,36 @@ export class Game {
     return new UiWorld(
       scene.ui,
       this.data,
-      (id, payload) => {
-        const type = this.signalTypes.get(id);
-        if (type !== (payload === undefined ? "void" : typeOf(payload)))
-          throw Error("The UI event is missing or has the wrong payload type.");
-        this.scheduler.queueUi(id, payload);
-        this.triggerSceneSignal(id, this.scene.id);
-      },
+      (id, payload) => this.handleUiSignal(id, payload, undefined, scene.id),
       previous,
     );
+  }
+
+  private handleUiSignal(
+    id: string,
+    payload?: Value,
+    screen?: string,
+    source?: string,
+  ) {
+    const type = this.signalTypes.get(id);
+    if (type !== (payload === undefined ? "void" : typeOf(payload)))
+      throw Error("The UI event is missing or has the wrong payload type.");
+    this.scheduler.queueUi(id, payload);
+    this.triggerSceneSignal(id, source ?? this.scene.id);
+    this.screens.signal(id, source ?? this.scene.id, screen);
+    if (this.screens.paused) this.input.clear();
+  }
+
+  get uiScreens() {
+    return this.screens.views(this.ui);
+  }
+  get gameplayPaused() {
+    return this.screens.paused;
+  }
+
+  controlUi(command: UiCommand, scene = this.scene.id) {
+    this.screens.command(command, scene);
+    if (this.screens.paused) this.input.clear();
   }
 
   // Apply authored edits at the boundary between animation frames. Keep live values
@@ -549,6 +580,13 @@ export class Game {
     this.previousSceneRevision = this.sceneRevision;
     this.project = project;
     this.scene = scene;
+    if (residencyChanged || previous.uiFlow !== project.uiFlow || resetUi)
+      this.screens.refresh(
+        project.uiFlow,
+        scene.id,
+        this.sceneStatus.loaded,
+        resetUi ? scene.id : undefined,
+      );
     const assetsChanged = previous.assets !== project.assets;
     const axesChanged = previous.input !== project.input;
     const dataChanged = previous.data !== project.data;
@@ -953,10 +991,10 @@ export class Game {
           (reference.kind === "asset" && this.assets.has(reference.id))),
       emit: (id, value) => {
         this.scheduler.emit(id, value);
-        this.triggerSceneSignal(
-          id,
-          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
-        );
+        const source =
+          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id;
+        this.triggerSceneSignal(id, source);
+        this.screens.signal(id, source);
       },
       sceneFlow: (operation, target, route) => {
         if (!route) this.controlScene({ operation, sceneId: target });
@@ -978,7 +1016,22 @@ export class Game {
         state.animation.play(clip);
       },
       effect: (command) => this.effect(state, command),
-      ui: (id, property, value) => this.ui.set(id, property, value),
+      ui: (id, property, value, screenId) =>
+        this.screens.setWidget(
+          this.ui,
+          id,
+          property,
+          value,
+          screenId,
+          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+        ),
+      screen: (action, target, layerId) =>
+        this.controlUi(
+          action === "theme"
+            ? { action, themeId: target || undefined }
+            : { action, screenId: target, layerId },
+          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+        ),
       data: {
         read: (source, id, key) => this.data.read(source, id, key),
         write: (id, value) => this.data.write(id, value),
@@ -1201,18 +1254,26 @@ export class Game {
     if (!Number.isFinite(seconds) || seconds < 0) return;
     this.start();
     if (this.scheduler.paused) return;
+    this.screens.advance(Math.min(seconds, 0.15));
+    if (this.screens.paused) this.scheduler.pumpPausedUi();
     this.scheduler.pump();
     const pending = this.tickPending;
     this.finishTick();
     if (this.scheduler.paused) return;
-    if (!pending) this.processScenes(0);
+    if (!pending)
+      this.processScenes(this.screens.paused ? Math.min(seconds, 0.15) : 0);
+    if (this.screens.paused) {
+      this.input.clear();
+      this.accumulator = 0;
+      return;
+    }
     this.accumulator += Math.min(seconds, 0.15);
     while (this.accumulator + 1e-10 >= STEP) {
       this.accumulator -= STEP;
       this.beginTick();
       this.scheduler.pump();
       this.finishTick();
-      if (this.scheduler.paused) {
+      if (this.scheduler.paused || this.screens.paused) {
         this.accumulator = 0;
         break;
       }

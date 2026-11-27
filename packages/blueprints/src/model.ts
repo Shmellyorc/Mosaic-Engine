@@ -227,6 +227,17 @@ export const sceneOperationSchema = z.enum([
 ]);
 export type SceneOperation = z.infer<typeof sceneOperationSchema>;
 
+export const screenActionSchema = z.enum([
+  "show",
+  "hide",
+  "push",
+  "pop",
+  "replace",
+  "move",
+  "theme",
+]);
+export type ScreenAction = z.infer<typeof screenActionSchema>;
+
 export const uiPropertySchema = z.enum([
   "text",
   "visible",
@@ -273,8 +284,15 @@ type BlockData =
   | { kind: "saveSlot"; slotId: string; operation: "save" | "load" }
   | { kind: "language"; locale: string }
   | {
+      kind: "screen";
+      action: ScreenAction;
+      target: Expression;
+      layerId?: string;
+    }
+  | {
       kind: "ui";
       widgetId: string;
+      screenId?: string;
       property: UiProperty;
       valueType?: z.infer<typeof uiValueTypeSchema>;
       value?: Expression;
@@ -387,6 +405,13 @@ const blockSchema: z.ZodType<Block> = z.lazy(() =>
     z.object({ id, kind: z.literal("language"), locale: text }),
     z.object({
       id,
+      kind: z.literal("screen"),
+      action: screenActionSchema,
+      target: expressionSchema,
+      layerId: id.optional(),
+    }),
+    z.object({
+      id,
       kind: z.literal("sceneFlow"),
       operation: sceneOperationSchema,
       target: expressionSchema,
@@ -396,6 +421,7 @@ const blockSchema: z.ZodType<Block> = z.lazy(() =>
       id,
       kind: z.literal("ui"),
       widgetId: id,
+      screenId: id.optional(),
       property: uiPropertySchema,
       valueType: uiValueTypeSchema.optional(),
       value: expressionSchema.optional(),

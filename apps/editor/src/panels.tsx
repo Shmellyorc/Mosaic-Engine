@@ -1,4 +1,10 @@
-import { documentKey, sceneFlowDocument, type DocumentRef } from "./documents";
+import { newUiScreen } from "./ui-flow";
+import {
+  documentKey,
+  sceneFlowDocument,
+  uiFlowDocument,
+  type DocumentRef,
+} from "./documents";
 import { auditAssets } from "./asset-audit";
 import {
   Box,
@@ -196,6 +202,28 @@ export function ProjectPanel() {
               )}
             </button>
           ))}
+      </details>
+      <details className="tree-group" open>
+        <summary>
+          <Folder size={15} /> Interfaces
+          <button
+            className="icon-button push"
+            aria-label="New UI screen"
+            onClick={(event) => {
+              event.preventDefault();
+              newUiScreen();
+            }}
+          >
+            <Plus size={15} />
+          </button>
+        </summary>
+        {matches("Project.uiflow") &&
+          row("Project.uiflow", uiFlowDocument, Layers3)}
+        {project.uiFlow?.screens
+          .filter(({ name }) => matches(name))
+          .map(({ id, name }) =>
+            row(name + ".ui", { kind: "uiScreen", id }, Layers3),
+          )}
       </details>
       <details className="tree-group">
         <summary>

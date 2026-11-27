@@ -15,11 +15,14 @@ export const editors = [
   "Audio",
   "Data",
   "UI",
+  "UI Flow",
   "Input",
 ] as const;
 export type Workspace = (typeof editors)[number];
 
 export type DocumentKind =
+  | "uiFlow"
+  | "uiScreen"
   | "sceneFlow"
   | "scene"
   | "entity"
@@ -50,6 +53,8 @@ const kinds = new Set<DocumentKind>([
   ...entityKinds,
   "blueprint",
   "sceneFlow",
+  "uiFlow",
+  "uiScreen",
   "image",
   "prefab",
   "sound",
@@ -68,6 +73,16 @@ export function documentInfo(project: Project, ref: DocumentRef) {
   let extension: string = ref.kind;
   let workspace: Workspace = "Scene";
   switch (ref.kind) {
+    case "uiFlow":
+      name = "Project";
+      extension = "uiflow";
+      workspace = "UI Flow";
+      break;
+    case "uiScreen":
+      name = project.uiFlow?.screens.find(({ id }) => id === ref.id)?.name;
+      extension = "ui";
+      workspace = "UI";
+      break;
     case "sceneFlow":
       name = "Project";
       extension = "sceneflow";
@@ -166,3 +181,5 @@ export const sceneFlowDocument = {
   kind: "sceneFlow",
   id: "project-scenes",
 } as const;
+
+export const uiFlowDocument = { kind: "uiFlow", id: "project-ui" } as const;

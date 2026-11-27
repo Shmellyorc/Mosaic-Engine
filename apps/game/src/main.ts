@@ -5,7 +5,7 @@ import {
   browserSlotStorage,
   connectKeyboard,
   Game,
-  mountGameUi,
+  mountUiStack,
   MAX_SAVE_BYTES,
 } from "@mosaic/runtime";
 
@@ -118,21 +118,12 @@ async function boot() {
   const sceneLayer = document.createElement("div");
   sceneLayer.style.cssText = "position:absolute;inset:0";
   parent.append(sceneLayer);
-  let activeUi: typeof game.ui | undefined;
-  let surface: ReturnType<typeof mountGameUi> | undefined;
-  function updateUi() {
-    if (activeUi !== game.ui) {
-      surface?.destroy();
-      activeUi = game.ui;
-      surface = mountGameUi(parent, activeUi, {
-        width: project.width,
-        height: project.height,
-        assets: project.assets,
-        report,
-      });
-    }
-    surface?.update();
-  }
+  const surface = mountUiStack(parent, {
+    width: project.width,
+    height: project.height,
+    assets: project.assets,
+    report,
+  });
   const audio = new AudioMixer(report);
   const audioButton =
     document.querySelector<HTMLButtonElement>("#enable-audio")!;
@@ -197,7 +188,7 @@ async function boot() {
     last = now;
     if (!loading) game.advance(dt);
     showData?.();
-    updateUi();
+    surface.update(game.uiScreens);
     if (audioReady) game.consumeAudio((command) => audio.dispatch(command));
     const failure = game.logs.findLast(
       (entry) => entry.level === "error",
@@ -224,7 +215,7 @@ async function boot() {
     request++;
     cancelAnimationFrame(frame);
     detach();
-    surface?.destroy();
+    surface.destroy();
     audio.dispose();
     renderer?.dispose();
   });

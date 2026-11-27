@@ -22,6 +22,7 @@ import {
   restoreDocumentRefs,
   sceneDocument,
   sceneFlowDocument,
+  uiFlowDocument,
   type DocumentRef,
   type Workspace,
 } from "./documents";
@@ -323,6 +324,10 @@ export function openDocument(
     ...(!sameScene || options.resetSelection
       ? { entityId: null, widgetId: null }
       : {}),
+    ...((ref.kind === "uiScreen" || ref.kind === "ui") &&
+    key !== state.activeDocument
+      ? { widgetId: null }
+      : {}),
     ...(ref.kind === "blueprint" && ref.id !== state.blueprintId
       ? { blueprintId: ref.id, eventId: null, selectedTile: null }
       : {}),
@@ -362,6 +367,9 @@ export function openEditor(workspace: Workspace) {
   const forScene = (kind: DocumentRef["kind"], id = scene.id) =>
     openDocument({ kind, id, sceneId: scene.id }, { workspace });
   switch (workspace) {
+    case "UI Flow":
+      openDocument(uiFlowDocument);
+      break;
     case "Scene Flow":
       openDocument(sceneFlowDocument);
       break;

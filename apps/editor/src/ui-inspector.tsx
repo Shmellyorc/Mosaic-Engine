@@ -14,11 +14,14 @@ import {
 } from "@mosaic/model";
 import { emptyCatalog, SelectData } from "./data-controls";
 import { Field, NumberField, Section, TextField } from "./controls";
-import { editScene, selectedScene, useEditor } from "./state";
+import { useEditor } from "./state";
 import {
   deleteWidget,
   descendants,
   editWidget,
+  editUi,
+  uiDocument,
+  widgetLocked,
   moveWidget,
   selectedWidget,
   widgetLabels,
@@ -192,11 +195,12 @@ export function UiInspector() {
 }
 
 function WidgetInspector({ widget }: { widget: Widget }) {
-  const scene = useEditor(selectedScene);
+  const doc = useEditor(uiDocument);
+  const themes = useEditor((state) => state.project.uiFlow?.themes);
   const assets = useEditor((state) => state.project.assets);
   const signals = useEditor((state) => state.project.signals ?? emptySignals);
   const data = useEditor((state) => state.project.data) ?? emptyCatalog;
-  const all = scene.ui!.widgets;
+  const all = doc!.widgets;
   const children = descendants(all, widget.id);
   const parent = all.find(({ id }) => id === widget.parent);
   const inStack = Boolean(parent?.layout && parent.layout.mode !== "free");
@@ -347,14 +351,16 @@ function WidgetInspector({ widget }: { widget: Widget }) {
         </Field>
         <div className="effect-row">
           <button
-            disabled={position <= 0}
+            disabled={position <= 0 || widgetLocked(all, widget.id)}
             aria-label="Move widget earlier"
             onClick={() => moveWidget(widget.id, -1)}
           >
             <ArrowUp size={14} />
           </button>
           <button
-            disabled={position === members.length - 1}
+            disabled={
+              position === members.length - 1 || widgetLocked(all, widget.id)
+            }
             aria-label="Move widget later"
             onClick={() => moveWidget(widget.id, 1)}
           >
@@ -505,6 +511,58 @@ function WidgetInspector({ widget }: { widget: Widget }) {
         </Section>
       )}
       <Section title="Appearance">
+        {widget.kind === "container" && (
+          <Field label="Draw panel">
+            <input
+              type="checkbox"
+              aria-label="Draw panel"
+              checked={widget.panel ?? widget.style.background !== null}
+              onChange={(event) =>
+                change((draft) => {
+                  draft.panel = event.target.checked;
+                  if (draft.panel && !draft.style.background)
+                    draft.style.background = "#252836";
+                })
+              }
+            />
+          </Field>
+        )}
+        {!!themes?.length && (
+          <Field label="Local appearance">
+            <input
+              type="checkbox"
+              aria-label="Override theme with widget appearance"
+              checked={!!widget.styleOverride}
+              onChange={(event) =>
+                change((draft) => {
+                  draft.styleOverride = event.target.checked || undefined;
+                })
+              }
+            />
+          </Field>
+        )}
+        {!!themes?.length && (
+          <Field label="Theme style">
+            <select
+              aria-label="Widget theme style"
+              value={widget.appearance ?? ""}
+              onChange={(event) =>
+                change((draft) => {
+                  draft.appearance = event.target.value || undefined;
+                })
+              }
+            >
+              <option value="">By widget type</option>
+              {[
+                ...new Set(
+                  themes.flatMap((theme) => Object.keys(theme.styles)),
+                ),
+              ].map((key) => (
+                <option key={key}>{key}</option>
+              ))}
+            </select>
+          </Field>
+        )}
         {widget.kind !== "container" && (
           <>
             <Field label={widget.kind === "image" ? "Alt text" : "Text"}>
@@ -792,12 +850,11 @@ function WidgetInspector({ widget }: { widget: Widget }) {
                 <input
                   type="checkbox"
                   aria-label="Initial UI focus"
-                  checked={scene.ui?.initialFocus === widget.id}
+                  checked={doc?.initialFocus === widget.id}
                   onChange={(event) =>
-                    editScene((draft) => {
-                      if (event.target.checked)
-                        draft.ui!.initialFocus = widget.id;
-                      else delete draft.ui!.initialFocus;
+                    editUi((draft) => {
+                      if (event.target.checked) draft.initialFocus = widget.id;
+                      else delete draft.initialFocus;
                     })
                   }
                 />

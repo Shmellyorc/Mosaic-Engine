@@ -14,7 +14,7 @@ import {
   fitFrame,
   Game,
   inversePoint,
-  mountGameUi,
+  mountUiStack,
   pickEntity,
   transformPoint,
   type Camera,
@@ -171,36 +171,30 @@ function GameUiPreview({
     mode.current = transport;
   }, [transport]);
   useEffect(() => {
-    let current: Game["ui"] | undefined;
     let sources: Project["assets"] | undefined;
     let width = 0,
       height = 0;
-    let overlay: ReturnType<typeof mountGameUi> | undefined;
+    let overlay: ReturnType<typeof mountUiStack> | undefined;
     let frame = 0;
     const tick = () => {
       const game = mode.current === "editing" ? author : (playGame() ?? author);
       if (
-        current !== game.ui ||
         sources !== game.project.assets ||
         width !== game.project.width ||
         height !== game.project.height
       ) {
-        current = game.ui;
         sources = game.project.assets;
         width = game.project.width;
         height = game.project.height;
         overlay?.destroy();
-        overlay = game.ui.document.widgets.length
-          ? mountGameUi(host.current!, game.ui, {
-              width: game.project.width,
-              height: game.project.height,
-              assets: game.project.assets,
-              report: (message) =>
-                useEditor.getState().report(message, "error"),
-            })
-          : undefined;
+        overlay = mountUiStack(host.current!, {
+          width: game.project.width,
+          height: game.project.height,
+          assets: game.project.assets,
+          report: (message) => useEditor.getState().report(message, "error"),
+        });
       }
-      overlay?.update(mode.current === "playing");
+      overlay?.update(game.uiScreens, mode.current === "playing");
       frame = requestAnimationFrame(tick);
     };
     tick();

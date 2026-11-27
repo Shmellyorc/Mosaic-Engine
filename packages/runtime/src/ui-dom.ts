@@ -1,3 +1,5 @@
+import type { UiScreenView } from "./ui-flow";
+import type { UiSkin, UiSurfaceStyle } from "@mosaic/model";
 import {
   interactiveWidget,
   widgetRange,
@@ -87,7 +89,10 @@ function createEntry(
     border: `${s.borderWidth}px solid ${s.border}`,
     borderRadius: px(s.radius),
     color: s.color,
-    background: s.background ?? "transparent",
+    background:
+      (widget.kind === "container" && widget.panel === false
+        ? null
+        : s.background) ?? "transparent",
     fontSize: px(s.fontSize),
     textAlign: s.align,
     accentColor: s.accent,
@@ -197,7 +202,7 @@ function createEntry(
   if (widget.kind === "input")
     Object.assign(control.style, {
       color: "inherit",
-      background: "#171322",
+      background: "transparent",
       border: "1px solid currentColor",
       borderRadius: "3px",
       padding: "3px 4px",
@@ -227,9 +232,9 @@ export function mountGameUi(
   if (editing) root.setAttribute("aria-hidden", "true");
   const style = document.createElement("style");
   style.textContent = `[data-game-ui] [data-ui-control]:focus-visible {outline:2px solid var(--ui-focus, #d9b9ff);outline-offset:-3px}
-    [data-game-ui] button[data-ui-control]:hover:not(:disabled) {background:rgba(255,255,255,.14)!important}
-    [data-game-ui] button[data-ui-control]:active:not(:disabled) {background:rgba(0,0,0,.2)!important}
-    [data-game-ui] [data-ui-control]:disabled {opacity:.55;cursor:default!important}
+    [data-game-ui] button[data-ui-control]:hover:not(:disabled):not([data-skinned]) {background:rgba(255,255,255,.14)!important}
+    [data-game-ui] button[data-ui-control]:active:not(:disabled):not([data-skinned]) {background:rgba(0,0,0,.2)!important}
+    [data-game-ui] [data-ui-control]:disabled:not([data-skinned]) {opacity:.55;cursor:default!important}
     [data-game-ui][aria-hidden=true] [data-ui-control] {pointer-events:none}`;
   root.append(style);
   const entries = new Map<string, Entry>();
@@ -237,6 +242,56 @@ export function mountGameUi(
     options.assets.map((asset) => [asset.id, asset.source]),
   );
   const widgets = world.document.widgets;
+  let skinner: ((name: string) => UiSkin | undefined) | undefined;
+  let skinnerVersion: number | undefined;
+  let modal = false;
+  function appearance(entry: Entry) {
+    const { box, widget, control } = entry;
+    const skin = skinner?.(widget.appearance ?? widget.kind);
+    if (control) control.toggleAttribute("data-skinned", !!skin);
+    const state = control?.disabled
+      ? skin?.disabled
+      : box.matches(":active")
+        ? skin?.pressed
+        : box.matches(":hover")
+          ? skin?.hover
+          : control?.matches(":focus-visible")
+            ? skin?.focused
+            : undefined;
+    const s: UiSurfaceStyle = {
+      ...widget.style,
+      ...skin?.normal,
+      ...(widget.styleOverride ? widget.style : {}),
+      ...state,
+    };
+    const image = s.nineSlice && assets.get(s.nineSlice.assetId);
+    const border =
+      s.nineSlice && image ? s.nineSlice.width : (s.borderWidth ?? 0);
+    Object.assign(box.style, {
+      color: s.color,
+      background:
+        s.background && (widget.kind !== "container" || widget.panel !== false)
+          ? s.background
+          : "transparent",
+      border: `${border}px solid ${s.border}`,
+      borderRadius: px(s.radius ?? 0),
+      fontSize: px(s.fontSize ?? 14),
+      accentColor: s.accent,
+      fontFamily:
+        s.font === "serif"
+          ? "Georgia, serif"
+          : s.font === "mono"
+            ? "ui-monospace, monospace"
+            : "system-ui, sans-serif",
+      fontWeight: s.weight ?? "normal",
+      opacity: String(s.opacity ?? 1),
+      borderImage:
+        image && s.nineSlice
+          ? `url("${image}") ${s.nineSlice.slice} fill stretch`
+          : "none",
+    });
+    box.style.setProperty("--ui-focus", s.accent ?? "#d9b9ff");
+  }
   const definitions = new Map(widgets.map((widget) => [widget.id, widget]));
   for (const widget of widgets) {
     const layout = widget.parent
@@ -249,6 +304,20 @@ export function mountGameUi(
       editing,
     );
     entries.set(widget.id, entry);
+    for (const event of [
+      "pointerenter",
+      "pointerleave",
+      "pointerdown",
+      "pointerup",
+      "pointercancel",
+      "focusin",
+      "focusout",
+      "keydown",
+      "keyup",
+    ])
+      entry.box.addEventListener(event, () => {
+        if (skinner) queueMicrotask(() => appearance(entry));
+      });
   }
   for (const { widget, box, control } of entries.values()) {
     (widget.parent ? (entries.get(widget.parent)?.box ?? root) : root).append(
@@ -298,6 +367,23 @@ export function mountGameUi(
     return false;
   }
   const navigate = (event: KeyboardEvent) => {
+    if (event.key === "Tab" && interactive && modal) {
+      const available = [...entries.values()]
+        .filter(({ widget, control }) => control && world.available(widget.id))
+        .map(({ widget }) => widget.id);
+      const at = available.indexOf(
+        (event.target as HTMLElement).dataset.uiControl ?? "",
+      );
+      if (available.length)
+        focus(
+          available[
+            (at + (event.shiftKey ? -1 : 1) + available.length) %
+              available.length
+          ],
+        );
+      event.preventDefault();
+      return;
+    }
     const direction = arrow[event.key];
     const source = (event.target as HTMLElement).dataset.uiControl;
     if (!direction || !source || !interactive) return;
@@ -351,7 +437,10 @@ export function mountGameUi(
         const disabled = editing
           ? !current.enabled
           : !active || !world.available(widget.id);
-        if (control.disabled !== disabled) control.disabled = disabled;
+        if (control.disabled !== disabled) {
+          control.disabled = disabled;
+          if (skinner) appearance(entry);
+        }
       }
       if (previous?.text !== current.text) {
         if (label) label.textContent = current.text;
@@ -388,6 +477,22 @@ export function mountGameUi(
   }
   return {
     update,
+    root,
+    setModal(value: boolean) {
+      modal = value;
+    },
+    applySkin(version: number | undefined, skin: typeof skinner) {
+      if (skinnerVersion === version && !!skin === !!skinner) return;
+      skinner = skin;
+      skinnerVersion = version;
+      for (const entry of entries.values()) appearance(entry);
+    },
+    focusFirst() {
+      if (world.focusRequest && focus(world.focusRequest.id)) return;
+      for (const { widget } of entries.values()) if (focus(widget.id)) return;
+      root.tabIndex = -1;
+      root.focus({ preventScroll: true });
+    },
     get scale() {
       return scale;
     },
@@ -395,6 +500,79 @@ export function mountGameUi(
     destroy() {
       observer.disconnect();
       root.remove();
+    },
+  };
+}
+
+export function mountUiStack(host: HTMLElement, options: SurfaceOptions) {
+  const surfaces = new Map<
+    string,
+    { surface: ReturnType<typeof mountGameUi>; world: UiWorld }
+  >();
+  let modal: string | undefined;
+  let previousFocus: HTMLElement | undefined;
+  return {
+    update(views: UiScreenView[], interactive = true) {
+      const live = new Set(views.map(({ key }) => key));
+      for (const [key, entry] of surfaces) {
+        if (live.has(key)) continue;
+        entry.surface.destroy();
+        surfaces.delete(key);
+      }
+      const nextModal = interactive
+        ? views.find(({ modal }) => modal)?.key
+        : undefined;
+      if (nextModal && !modal && document.activeElement instanceof HTMLElement)
+        previousFocus = document.activeElement;
+      views.forEach((view, index) => {
+        let entry = surfaces.get(view.key);
+        if (entry?.world !== view.world) {
+          entry?.surface.destroy();
+          entry = {
+            surface: mountGameUi(host, view.world, options),
+            world: view.world,
+          };
+          surfaces.set(view.key, entry);
+        }
+        const { surface } = entry;
+        surface.root.style.zIndex = String(index + 2);
+        surface.root.style.opacity = String(view.opacity);
+        surface.root.style.pointerEvents =
+          interactive && view.block ? "auto" : "none";
+        surface.root.style.visibility =
+          view.opacity === 0 ? "hidden" : "visible";
+        surface.setModal(!!view.modal);
+        surface.applySkin(view.skinVersion, view.skin);
+        surface.update(
+          interactive && view.active && (view.opacity > 0 || !view.modal),
+        );
+      });
+      if (nextModal && nextModal !== modal) {
+        const current = surfaces.get(nextModal)?.surface;
+        if (current && current.root.style.visibility === "visible")
+          current.focusFirst();
+      } else if (modal && !nextModal) {
+        if (previousFocus?.isConnected)
+          previousFocus.focus({ preventScroll: true });
+        else
+          host
+            .closest<HTMLElement>("[tabindex]")
+            ?.focus({ preventScroll: true });
+        previousFocus = undefined;
+      }
+      if (
+        nextModal &&
+        document.activeElement &&
+        !surfaces.get(nextModal)?.surface.root.contains(document.activeElement)
+      ) {
+        const surface = surfaces.get(nextModal)?.surface;
+        if (surface?.root.style.visibility === "visible") surface.focusFirst();
+      }
+      modal = nextModal;
+    },
+    destroy() {
+      for (const { surface } of surfaces.values()) surface.destroy();
+      surfaces.clear();
     },
   };
 }

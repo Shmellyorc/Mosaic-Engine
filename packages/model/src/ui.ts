@@ -53,6 +53,10 @@ export const widgetSchema = z.object({
   text: z.string().max(300),
   accessibleName: z.string().max(160),
   image: id.optional(),
+  appearance: id.optional(),
+  locked: z.boolean().optional(),
+  styleOverride: z.boolean().optional(),
+  panel: z.boolean().optional(),
   fit: z.enum(["contain", "cover", "fill"]).optional(),
   value: z.union([z.boolean(), z.number(), z.string().max(300)]).optional(),
   range: z
@@ -199,14 +203,14 @@ export function createWidget(
       grow: 0,
     },
     style: {
-      background: isContainer ? "#211b36" : interactive ? "#453365" : null,
+      background: interactive ? "#292c37" : null,
       color: "#f5edff",
-      border: "#9070c5",
-      borderWidth: isContainer || interactive ? 1 : 0,
+      border: "#696e81",
+      borderWidth: interactive ? 1 : 0,
       radius: isContainer ? 10 : 6,
       fontSize: 15,
       align: kind === "button" ? "center" : "left",
-      accent: "#c09afa",
+      accent: "#aab3dc",
     },
     ...(isContainer
       ? {
@@ -224,7 +228,7 @@ export function createWidget(
   };
 }
 
-export function validateUi(ui: UiDocument, assets: Set<string>) {
+export function validateUi(ui: UiDocument, assets: ReadonlySet<string>) {
   const nodes = new Map(ui.widgets.map((widget) => [widget.id, widget]));
   if (nodes.size !== ui.widgets.length) throw Error("Duplicate UI widget ID.");
   const focusable = (id: string) => {

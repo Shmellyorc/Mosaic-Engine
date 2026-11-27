@@ -55,6 +55,7 @@ import {
   dataSourceSchema,
   uiPropertySchema,
   sceneOperationSchema,
+  screenActionSchema,
   type DataSource,
   type Binary,
   type Block,
@@ -221,6 +222,13 @@ const kinds = {
       "Change, add, unload, reload, or preload a scene or follow a Scene Flow route.",
     tone: "purple",
     Icon: GitBranch,
+  },
+  screen: {
+    name: "Control UI Screen",
+    description:
+      "Show, hide, push, pop, replace, move, or switch the theme of reusable screens.",
+    tone: "purple",
+    Icon: Monitor,
   },
   ui: {
     name: "Set UI Widget",
@@ -462,6 +470,8 @@ function makeBlock(
         target: literal(""),
         route: false,
       };
+    case "screen":
+      return { id, kind, action: "show", target: literal("") };
     case "ui":
       return {
         id,
@@ -2155,7 +2165,13 @@ function UiBlockFields({
   expression: RenderExpression;
   replace: (block: Block) => void;
 }) {
-  const widgets = useEditor((state) => selectedScene(state).ui?.widgets);
+  const screens = useEditor((state) => state.project.uiFlow?.screens);
+  const widgets = useEditor((state) =>
+    block.screenId
+      ? state.project.uiFlow?.screens.find(({ id }) => id === block.screenId)
+          ?.document.widgets
+      : selectedScene(state).ui?.widgets,
+  );
   const widget = widgets?.find(({ id }) => id === block.widgetId);
   const valueType = widget ? widgetValueType(widget.kind) : block.valueType;
   const options = uiPropertySchema.options.filter((property) =>
@@ -2196,6 +2212,20 @@ function UiBlockFields({
         : "boolean";
   return (
     <>
+      {!!screens?.length && (
+        <EffectChoice
+          label="Target screen"
+          value={block.screenId ?? ""}
+          options={[{ id: "", name: "Scene UI" }, ...screens]}
+          change={(screenId) =>
+            replace({
+              ...block,
+              screenId: screenId || undefined,
+              widgetId: "unassigned",
+            })
+          }
+        />
+      )}
       <EffectChoice
         label="Target widget"
         value={block.widgetId}
@@ -2285,6 +2315,59 @@ function SceneBlockFields({
     </>
   );
 }
+function ScreenBlockFields({
+  block,
+  replace,
+  expression,
+}: {
+  block: Extract<Block, { kind: "screen" }>;
+  replace: (block: Block) => void;
+  expression: RenderExpression;
+}) {
+  const flow = useEditor((state) => state.project.uiFlow);
+  const target =
+    block.target.kind === "literal" ? String(block.target.value) : "";
+  return (
+    <>
+      <EffectChoice
+        label="Screen action"
+        value={block.action}
+        options={screenActionSchema.options.map((id) => ({ id, name: id }))}
+        change={(id) =>
+          replace({ ...block, action: screenActionSchema.parse(id) })
+        }
+      />
+      {block.action !== "pop" && (
+        <>
+          <EffectChoice
+            label={block.action === "theme" ? "Theme" : "Screen"}
+            value={target}
+            options={
+              block.action === "theme"
+                ? [{ id: "", name: "Project default" }, ...(flow?.themes ?? [])]
+                : (flow?.screens ?? [])
+            }
+            change={(id) => replace({ ...block, target: literal(id) })}
+          />
+          {expression(
+            "Screen or theme ID",
+            block.target,
+            (target) => replace({ ...block, target }),
+            "string",
+          )}
+        </>
+      )}
+      {block.action === "move" && (
+        <EffectChoice
+          label="Destination layer"
+          value={block.layerId ?? ""}
+          options={flow?.layers ?? []}
+          change={(layerId) => replace({ ...block, layerId })}
+        />
+      )}
+    </>
+  );
+}
 function AdvancedFields({
   block,
   blueprint,
@@ -2303,6 +2386,14 @@ function AdvancedFields({
   replace: (block: Block) => void;
 }) {
   switch (block.kind) {
+    case "screen":
+      return (
+        <ScreenBlockFields
+          block={block}
+          replace={replace}
+          expression={expression}
+        />
+      );
     case "sceneFlow":
       return (
         <SceneBlockFields

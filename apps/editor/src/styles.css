@@ -2132,3 +2132,68 @@ button.tree-row {
 .flow-inspector .tree-row {
   display: flex;
 }
+
+.ui-tree-item {
+  display: flex;
+  align-items: center;
+}
+.ui-tree-item > .tree-row {
+  flex: 1;
+  min-width: 0;
+}
+.ui-root-drop {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px dashed var(--edge);
+}
+.ui-lane {
+  border: 1px solid var(--edge);
+  background: #1d1e2c;
+  border-radius: 6px;
+  margin-bottom: 9px;
+}
+.ui-lane header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 7px;
+}
+.ui-lane header input {
+  width: auto;
+  flex: 1;
+  min-width: 70px;
+}
+.ui-lane-screens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 7px 7px;
+}
+.ui-flow-screen,
+.ui-route-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 35px;
+}
+.ui-flow-screen[aria-pressed="true"],
+.ui-route-row[aria-pressed="true"] {
+  border-color: #ae89e0;
+  background: #3b2d54;
+}
+.ui-route-row {
+  width: 100%;
+  margin-bottom: 5px;
+}
+.ui-route-row small {
+  margin-left: auto;
+  color: var(--muted);
+}
+.ui-flow-content {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  max-width: 900px;
+}

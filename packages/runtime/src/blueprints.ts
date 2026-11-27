@@ -53,6 +53,7 @@ export class BlueprintScheduler {
   private cursor = 0;
   private sleeping: Job[] = [];
   private deliveries: Delivery[] = [];
+  private uiEvents: { signalId: string; payload?: Value }[] = [];
   private contacts: { signalId: string; entityId?: string; payload?: Value }[] =
     [];
   private listeners = new Map<string, { binding: Binding; entry: Entry }[]>();
@@ -118,20 +119,10 @@ export class BlueprintScheduler {
     this.emitted = 0;
     this.delivered = 0;
     this.activeBlocks.clear();
-    for (const contact of this.contacts) {
-      for (const { binding, entry } of this.listeners.get(contact.signalId) ??
-        []) {
-        if (contact.entityId && binding.id !== contact.entityId) continue;
-        if (
-          this.signalJobs >= MAX_SIGNAL_JOBS ||
-          this.delivered >= MAX_DELIVERIES_PER_TICK
-        )
-          break;
-        this.delivered++;
-        this.enqueue(binding, entry, contact.payload);
-      }
-    }
+    this.deliverExternal(this.contacts);
     this.contacts = [];
+    this.deliverExternal(this.uiEvents);
+    this.uiEvents = [];
     const sleeping: Job[] = [];
     for (const job of this.sleeping) {
       if (job.wake <= this.tick) this.ready.push(job);
@@ -152,9 +143,33 @@ export class BlueprintScheduler {
   queueUi(signalId: string, payload?: Value) {
     if (
       this.listeners.has(signalId) &&
-      this.contacts.length < MAX_DELIVERIES_PER_TICK
+      this.uiEvents.length < MAX_DELIVERIES_PER_TICK
     )
-      this.contacts.push({ signalId, payload });
+      this.uiEvents.push({ signalId, payload });
+  }
+  pumpPausedUi() {
+    if (!this.uiEvents.length) return;
+    this.delivered = 0;
+    this.emitted = 0;
+    this.deliverExternal(this.uiEvents);
+    this.uiEvents = [];
+  }
+  private deliverExternal(
+    events: { signalId: string; entityId?: string; payload?: Value }[],
+  ) {
+    for (const contact of events) {
+      for (const { binding, entry } of this.listeners.get(contact.signalId) ??
+        []) {
+        if (contact.entityId && binding.id !== contact.entityId) continue;
+        if (
+          this.signalJobs >= MAX_SIGNAL_JOBS ||
+          this.delivered >= MAX_DELIVERIES_PER_TICK
+        )
+          break;
+        this.delivered++;
+        this.enqueue(binding, entry, contact.payload);
+      }
+    }
   }
   private enqueue(binding: Binding, entry: Entry, payload?: Value) {
     if (entry.kind === "update") {

@@ -1,10 +1,12 @@
 import {
   createWidget,
   newId,
+  validateUi,
+  type UiDocument,
   type Widget,
   type WidgetKind,
 } from "@mosaic/model";
-import { editScene, selectedScene, useEditor } from "./state";
+import { activeDocument, editScene, selectedScene, useEditor } from "./state";
 
 export const widgetLabels: Record<WidgetKind, string> = {
   container: "Container",
@@ -17,14 +19,34 @@ export const widgetLabels: Record<WidgetKind, string> = {
   progress: "Progress",
 };
 export const noWidgets: Widget[] = [];
-export const selectedWidget = (state: ReturnType<typeof useEditor.getState>) =>
-  selectedScene(state).ui?.widgets.find(
-    (widget) => widget.id === state.widgetId,
-  );
+type Editor = ReturnType<typeof useEditor.getState>;
+export const activeUiScreen = (state: Editor) => {
+  const ref = activeDocument(state);
+  return ref?.kind === "uiScreen"
+    ? state.project.uiFlow?.screens.find(({ id }) => id === ref.id)
+    : undefined;
+};
+export const uiDocument = (state: Editor) =>
+  activeUiScreen(state)?.document ?? selectedScene(state).ui;
+export const selectedWidget = (state: Editor) =>
+  uiDocument(state)?.widgets.find(({ id }) => id === state.widgetId);
 
-export function addWidget(kind: WidgetKind) {
+export function editUi(change: (document: UiDocument) => void) {
   const state = useEditor.getState();
-  const widgets = selectedScene(state).ui?.widgets ?? noWidgets;
+  const screen = activeUiScreen(state);
+  if (screen)
+    state.edit((draft) => {
+      const doc = draft.uiFlow?.screens.find(
+        ({ id }) => id === screen.id,
+      )?.document;
+      if (doc) change(doc);
+    });
+  else editScene((scene) => change((scene.ui ??= { widgets: [] })));
+}
+
+export function addWidget(kind: WidgetKind, panel = false) {
+  const state = useEditor.getState();
+  const widgets = uiDocument(state)?.widgets ?? noWidgets;
   if (widgets.length >= 1000) {
     state.report("The scene already has 1,000 UI widgets.", "error");
     return;
@@ -46,7 +68,14 @@ export function addWidget(kind: WidgetKind) {
     return;
   }
   const item = createWidget(id, kind, parent);
-  const label = widgetLabels[kind];
+  if (kind === "container") {
+    item.panel = panel;
+    if (panel) {
+      item.style.background = "#252836";
+      item.style.borderWidth = 1;
+    }
+  }
+  const label = panel ? "Panel" : widgetLabels[kind];
   let suffix = 1;
   while (
     widgets.some(
@@ -57,16 +86,13 @@ export function addWidget(kind: WidgetKind) {
   item.name = suffix === 1 ? label : label + " " + suffix;
   const count = widgets.filter((entry) => entry.parent === parent).length;
   item.rect.x = item.rect.y = (parent ? 10 : 28) + 14 * (count % 9);
-  if (kind === "image") item.image = state.project.assets[0]?.id;
-  editScene((scene) => {
-    (scene.ui ??= { widgets: [] }).widgets.push(item);
-  });
+  editUi((doc) => doc.widgets.push(item));
   useEditor.setState({ widgetId: id });
 }
 
 export function editWidget(id: string, change: (widget: Widget) => void) {
-  editScene((scene) => {
-    const widget = scene.ui?.widgets.find((widget) => widget.id === id);
+  editUi((doc) => {
+    const widget = doc.widgets.find((widget) => widget.id === id);
     if (widget) change(widget);
   });
 }
@@ -92,13 +118,11 @@ export function descendants(widgets: Widget[], id: string) {
 }
 
 export function deleteWidget(id: string) {
-  editScene((scene) => {
-    if (!scene.ui) return;
-    const ids = descendants(scene.ui.widgets, id);
-    scene.ui.widgets = scene.ui.widgets.filter((widget) => !ids.has(widget.id));
-    if (scene.ui.initialFocus && ids.has(scene.ui.initialFocus))
-      delete scene.ui.initialFocus;
-    for (const widget of scene.ui.widgets)
+  editUi((doc) => {
+    const ids = descendants(doc.widgets, id);
+    doc.widgets = doc.widgets.filter((widget) => !ids.has(widget.id));
+    if (doc.initialFocus && ids.has(doc.initialFocus)) delete doc.initialFocus;
+    for (const widget of doc.widgets)
       if (widget.navigation)
         for (const direction of Object.keys(widget.navigation) as Array<
           keyof typeof widget.navigation
@@ -111,9 +135,7 @@ export function deleteWidget(id: string) {
 }
 
 export function moveWidget(id: string, direction: number) {
-  editScene((scene) => {
-    const widgets = scene.ui?.widgets;
-    if (!widgets) return;
+  editUi(({ widgets }) => {
     const index = widgets.findIndex((widget) => widget.id === id);
     if (index < 0) return;
     const other =
@@ -127,4 +149,87 @@ export function moveWidget(id: string, direction: number) {
     if (other < 0) return;
     [widgets[index], widgets[other]] = [widgets[other], widgets[index]];
   });
+}
+
+export function widgetLocked(widgets: Widget[], id: string) {
+  for (let widget = widgets.find((item) => item.id === id); widget;) {
+    if (widget.locked) return true;
+    const parent = widget.parent;
+    widget = widgets.find(({ id }) => id === parent);
+  }
+  return false;
+}
+
+export function reparentWidgets(
+  ids: string[],
+  parent: string | null,
+  before?: string,
+) {
+  const state = useEditor.getState();
+  const current = uiDocument(state);
+  if (!current) return;
+  const list = current.widgets;
+  const roots = ids.filter(
+    (id) =>
+      !ids.some((other) => other !== id && descendants(list, other).has(id)),
+  );
+  if (
+    roots.some(
+      (id) =>
+        widgetLocked(list, id) || (parent && descendants(list, id).has(parent)),
+    )
+  )
+    return;
+  if (parent && widgetLocked(list, parent)) return;
+  const source = list.filter(({ id }) => roots.includes(id));
+  const remaining = list.filter(({ id }) => !roots.includes(id));
+  const index = before ? remaining.findIndex(({ id }) => id === before) : -1;
+  remaining.splice(
+    index < 0 ? remaining.length : index,
+    0,
+    ...source.map((widget) => ({ ...widget, parent })),
+  );
+  try {
+    validateUi(
+      { ...current, widgets: remaining },
+      new Set(state.project.assets.map(({ id }) => id)),
+    );
+    editUi((doc) => {
+      doc.widgets = remaining;
+    });
+  } catch (error) {
+    state.report(String(error), "error");
+  }
+}
+
+export function duplicateWidgets(ids: string[]) {
+  const state = useEditor.getState();
+  const items = uiDocument(state)?.widgets ?? noWidgets;
+  const selected = new Set(
+    ids.flatMap((id) =>
+      widgetLocked(items, id) ? [] : [...descendants(items, id)],
+    ),
+  );
+  const copies = items.filter(({ id }) => selected.has(id));
+  if (!copies.length || items.length + copies.length > 1000) return;
+  const names = new Map(copies.map(({ id }) => [id, newId()]));
+  editUi((doc) => {
+    for (const widget of copies) {
+      const copy = structuredClone(widget);
+      copy.id = names.get(widget.id)!;
+      copy.name = widget.name.slice(0, 94) + " Copy";
+      copy.parent = (copy.parent && names.get(copy.parent)) || copy.parent;
+      if (copy.navigation)
+        for (const direction of Object.keys(
+          copy.navigation,
+        ) as (keyof typeof copy.navigation)[]) {
+          const target = copy.navigation[direction];
+          if (target && names.has(target))
+            copy.navigation[direction] = names.get(target);
+        }
+      doc.widgets.push(copy);
+    }
+  });
+  const primary = names.get(ids[0]);
+  if (primary) useEditor.setState({ widgetId: primary });
 }

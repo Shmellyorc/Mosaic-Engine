@@ -20,6 +20,7 @@ import {
   type ValueType,
   type UiProperty,
   type SceneOperation,
+  type ScreenAction,
 } from "./model";
 
 const MAX_ITERATIONS = 1024;
@@ -42,7 +43,8 @@ export type BlueprintContext = {
   };
   effect?(command: EffectCommand): void;
   sceneFlow?(operation: SceneOperation, target: string, route: boolean): void;
-  ui?(id: string, property: UiProperty, value?: Value): void;
+  screen?(action: ScreenAction, target: string, layerId?: string): void;
+  ui?(id: string, property: UiProperty, value?: Value, screenId?: string): void;
   log(blockId: string, value: Value): void;
   fault(diagnostic: Diagnostic): void;
   emit(signalId: string, value?: Value): void;
@@ -765,6 +767,14 @@ export function compileBlueprint(
           );
         };
       }
+      case "screen": {
+        const target = read(block.target, "string");
+        return function* (ctx, locals) {
+          if (!ctx.screen)
+            return fault("This runtime does not provide UI Flow.");
+          ctx.screen(block.action, String(target(ctx, locals)), block.layerId);
+        };
+      }
       case "ui": {
         if (block.widgetId === "unassigned") error("Choose a UI widget.");
         const type =
@@ -782,7 +792,12 @@ export function compileBlueprint(
         return function* (ctx, locals) {
           if (!ctx.ui)
             return fault("This runtime does not provide UI widgets.");
-          ctx.ui(block.widgetId, block.property, value?.(ctx, locals));
+          ctx.ui(
+            block.widgetId,
+            block.property,
+            value?.(ctx, locals),
+            block.screenId,
+          );
         };
       }
       case "log": {

@@ -1,9 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { Monitor, Plus, Square, Type, PanelTop, Layers3 } from "lucide-react";
-import { Game, mountGameUi } from "@mosaic/runtime";
-import { widgetKind, type Widget } from "@mosaic/model";
 import {
+  Monitor,
+  Plus,
+  Square,
+  Type,
+  PanelTop,
+  Layers3,
+  Copy,
+  Eye,
+  EyeOff,
+  Lock,
+  LockOpen,
+} from "lucide-react";
+import { Game, mountGameUi, UiWorld } from "@mosaic/runtime";
+import { resolveUiStyle, widgetKind, type Widget } from "@mosaic/model";
+import {
+  activeUiScreen,
   addWidget,
+  duplicateWidgets,
+  reparentWidgets,
+  uiDocument,
+  widgetLocked,
   editWidget,
   noWidgets,
   selectedWidget,
@@ -37,8 +54,14 @@ export function UiDesigner() {
   const project = useEditor((state) => state.project);
   const scene = useEditor(selectedScene);
   const selected = useEditor(selectedWidget);
-  const widgets = scene.ui?.widgets ?? noWidgets;
+  const doc = useEditor(uiDocument);
+  const screen = useEditor(activeUiScreen);
+  const widgets = doc?.widgets ?? noWidgets;
   const game = useMemo(() => new Game(project, scene.id), [project, scene.id]);
+  const world = useMemo(
+    () => (screen ? new UiWorld(doc, game.data, () => {}) : game.ui),
+    [doc, game, screen],
+  );
   const [size, setSize] = useState<Size>("game");
   const [showScene, setShowScene] = useState(true);
   const [space, setSpace] = useState({ width: 1, height: 1 });
@@ -57,19 +80,32 @@ export function UiDesigner() {
   }, []);
   useEffect(() => {
     const node = board.current!;
-    const layer = mountGameUi(node, game.ui, {
+    const layer = mountGameUi(node, world, {
       assets: project.assets,
       width: project.width,
       height: project.height,
       editing: true,
     });
     surface.current = layer;
+    if (screen && project.uiFlow) {
+      const flow = project.uiFlow;
+      layer.applySkin(1, (style) =>
+        resolveUiStyle(flow.themes, screen.themeId ?? flow.themeId, style),
+      );
+    }
     layer.update();
     return () => {
       layer.destroy();
       surface.current = null;
     };
-  }, [game, project.assets, project.width, project.height]);
+  }, [
+    world,
+    screen,
+    project.uiFlow,
+    project.assets,
+    project.width,
+    project.height,
+  ]);
   useEffect(() => {
     const node = selected && surface.current?.element(selected.id);
     node?.classList.add("ui-selected-widget");
@@ -100,7 +136,14 @@ export function UiDesigner() {
     );
     const widget = widgets.find(({ id }) => id === node?.dataset.widgetId);
     useEditor.setState({ widgetId: widget?.id ?? null });
-    if (!widget || !node || !free(widget) || !surface.current) return;
+    if (
+      !widget ||
+      !node ||
+      !free(widget) ||
+      !surface.current ||
+      widgetLocked(widgets, widget.id)
+    )
+      return;
     const r = widget.rect;
     const resize =
       (event.target as HTMLElement).closest("[data-ui-resize]") !== null;
@@ -196,17 +239,27 @@ export function UiDesigner() {
                 Add {widgetLabels[kind]}
               </button>
             ))}
+            <button
+              onClick={() => {
+                addWidget("container", true);
+                if (menu.current) menu.current.open = false;
+              }}
+            >
+              Add Panel
+            </button>
           </div>
         </details>
-        <button
-          title="Add a screen-space scene label"
-          onClick={() => {
-            useEditor.setState({ widgetId: null });
-            addEntity("text");
-          }}
-        >
-          <Type size={14} /> Label
-        </button>
+        {!screen && (
+          <button
+            title="Add a screen-space scene label"
+            onClick={() => {
+              useEditor.setState({ widgetId: null });
+              addEntity("text");
+            }}
+          >
+            <Type size={14} /> Label
+          </button>
+        )}
         <select
           aria-label="UI preview size"
           value={size}
@@ -248,7 +301,12 @@ export function UiDesigner() {
             drag.current = null;
           }}
           onKeyDown={(event) => {
-            if (!selected || !free(selected)) return;
+            if (
+              !selected ||
+              !free(selected) ||
+              widgetLocked(widgets, selected.id)
+            )
+              return;
             const delta = {
               ArrowLeft: [-1, 0],
               ArrowRight: [1, 0],
@@ -287,9 +345,17 @@ export function UiDesigner() {
 
 export function UiHierarchy() {
   const scene = useEditor(selectedScene);
+  const screen = useEditor(activeUiScreen);
   const active = useEditor((state) => state.widgetId);
   const activeEntity = useEditor((state) => state.entityId);
-  const widgets = scene.ui?.widgets ?? noWidgets;
+  const widgets = useEditor(uiDocument)?.widgets ?? noWidgets;
+  const [picked, setPicked] = useState<string[]>([]);
+  const dragged = useRef<string[]>([]);
+  const selection = picked.includes(active ?? "")
+    ? picked
+    : active
+      ? [active]
+      : [];
   const groups = useMemo(() => {
     const index = new Map<string | null, Widget[]>();
     for (const widget of widgets) {
@@ -299,32 +365,123 @@ export function UiHierarchy() {
     }
     return index;
   }, [widgets]);
-  const legacy = scene.entities.filter(
-    ({ visual }) => visual?.kind === "text" && visual.screen,
-  );
+  const legacy = screen
+    ? []
+    : scene.entities.filter(
+        ({ visual }) => visual?.kind === "text" && visual.screen,
+      );
   function rows(parent: string | null, depth = 0): React.ReactNode {
     return groups.get(parent)?.map((widget) => (
       <div key={widget.id}>
-        <button
-          className="tree-row"
-          aria-pressed={widget.id === active}
-          style={{ paddingLeft: 8 + 14 * depth }}
-          onClick={() => useEditor.setState({ widgetId: widget.id })}
+        <div
+          className="ui-tree-item"
+          style={{ paddingLeft: 4 + 12 * depth }}
+          onDragOver={(event) => {
+            if (dragged.current.length) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const inside =
+              widget.kind === "container" &&
+              (event.clientY - bounds.top) / bounds.height > 0.32;
+            reparentWidgets(
+              dragged.current,
+              inside ? widget.id : widget.parent,
+              inside ? undefined : widget.id,
+            );
+            dragged.current = [];
+          }}
         >
-          {widget.kind === "container" ? (
-            <PanelTop size={14} />
-          ) : (
-            <Square size={14} />
-          )}
-          <span>{widget.name}</span>
-        </button>
+          <button
+            className="tree-row"
+            aria-pressed={selection.includes(widget.id)}
+            draggable={!widgetLocked(widgets, widget.id)}
+            onDragStart={(event) => {
+              dragged.current = selection.includes(widget.id)
+                ? selection
+                : [widget.id];
+              event.dataTransfer.setData("text/plain", widget.id);
+              event.dataTransfer.effectAllowed = "move";
+            }}
+            onDragEnd={() => {
+              dragged.current = [];
+            }}
+            onClick={(event) => {
+              const multiple = event.ctrlKey || event.metaKey || event.shiftKey;
+              const next = multiple
+                ? selection.includes(widget.id)
+                  ? selection.filter((id) => id !== widget.id)
+                  : [...selection, widget.id]
+                : [widget.id];
+              setPicked(next);
+              useEditor.setState({ widgetId: next.at(-1) ?? null });
+            }}
+          >
+            {widget.kind === "container" ? (
+              <PanelTop size={14} />
+            ) : (
+              <Square size={14} />
+            )}
+            <span>{widget.name}</span>
+          </button>
+          <button
+            className="icon-button"
+            aria-label={
+              widget.visible ? "Hide " + widget.name : "Show " + widget.name
+            }
+            onClick={() =>
+              editWidget(widget.id, (draft) => {
+                draft.visible = !draft.visible;
+              })
+            }
+          >
+            {widget.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+          </button>
+          <button
+            className="icon-button"
+            aria-label={
+              widget.locked ? "Unlock " + widget.name : "Lock " + widget.name
+            }
+            onClick={() =>
+              editWidget(widget.id, (draft) => {
+                draft.locked = !draft.locked;
+              })
+            }
+          >
+            {widget.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+          </button>
+        </div>
         {rows(widget.id, depth + 1)}
       </div>
     ));
   }
   return (
     <div className="panel-body ui-hierarchy">
+      {selection.length > 0 && (
+        <div className="inline-actions">
+          <button onClick={() => duplicateWidgets(selection)}>
+            <Copy size={13} /> Duplicate
+          </button>
+        </div>
+      )}
       {rows(null)}
+      {!!widgets.length && (
+        <div
+          className="ui-root-drop"
+          onDragOver={(event) => {
+            if (dragged.current.length) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            reparentWidgets(dragged.current, null);
+            dragged.current = [];
+          }}
+        >
+          Screen root
+        </div>
+      )}
       {!widgets.length && (
         <small className="tree-empty">Add a widget in UI Designer.</small>
       )}

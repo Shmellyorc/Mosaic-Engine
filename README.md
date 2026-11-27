@@ -105,6 +105,8 @@ Choose **Ridge Trading Post** from the sample’s scene list. Press Space to buy
 
 Choose **Lantern Watch** in the sample project. Open **Controls** to try the bound signal meter, night patrol toggle, call sign field, and language buttons. In the menu, use the arrow keys to move between **Deploy Beacon** and **Controls**.
 
+Open `Project.uiflow` to arrange reusable `.ui` screens on ordered layers. Screens may start with the project or with a specific scene. Modal screens can trap focus, block lower input, and pause simulation while Blueprint UI events remain active. Pointer pass-through, show, hide, push, pop, replace, move and theme switching are configurable in UI Flow and Blueprint. UI assets draw after the world in both renderers. Screen authors can assign inherited themes, five control states, nine-slice imagery, typography and widget-level overrides.
+
 ## Profile a running scene
 
 Open **Window → Profiler** or select the Profiler tab beside Debug. Play the scene with **Game Preview** open. The panel samples frame intervals, simulation CPU time, draw-list generation, and renderer submission. It shows the latest values, 95th percentiles, draw commands, spatial candidates, resident tile chunks, decoded texture usage, and live reload timing. **Download capture** saves the latest 180 samples and counters as JSON. Use **Clear capture** before reproducing a slow interaction.
