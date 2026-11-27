@@ -230,12 +230,17 @@ export class MotionWorld {
   seek(id: string, seconds: number) {
     const timeline = this.timelines.get(id);
     if (!timeline) throw new Error("Timeline is missing from this scene.");
+    if (!Number.isFinite(seconds))
+      throw new Error("Timeline position must be finite.");
+    const position = Math.min(timeline.duration, Math.max(0, seconds));
+    const playback = this.active.get(id);
+    if (playback) playback.elapsed = position;
     for (const track of timeline.tracks) {
       const entity = this.entity(track.entityId);
       if (entity)
         entity.transform[track.property] = bounded(
           track.property,
-          sampleTrack(track, seconds),
+          sampleTrack(track, position),
         );
     }
   }

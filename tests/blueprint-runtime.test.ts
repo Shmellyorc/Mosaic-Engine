@@ -441,3 +441,65 @@ test("enforces runtime field access, operation signatures and catalog coverage",
     expect.arrayContaining(["readonly", "type", "args", "record"]),
   );
 });
+
+test("seeks an active timeline and keeps the playing cursor and transform in sync", () => {
+  const project = createProject();
+  const scene = project.scenes[0];
+  const actor = createEntity(scene.layers[0].id, "Timeline actor");
+  actor.blueprintId = "actor";
+  scene.entities = [actor];
+  scene.timelines = [
+    {
+      id: "track",
+      name: "Move across",
+      duration: 2,
+      loop: false,
+      autoplay: true,
+      tracks: [
+        {
+          id: "x",
+          entityId: actor.id,
+          property: "x",
+          keys: [
+            { time: 0, value: 0, ease: "linear" },
+            { time: 2, value: 200, ease: "linear" },
+          ],
+        },
+      ],
+    },
+  ];
+  project.blueprints = [
+    {
+      id: "actor",
+      name: "Seek timeline",
+      version: 2,
+      variables: [{ id: "cursor", name: "Cursor", type: "number", initial: 0 }],
+      events: [
+        {
+          id: "start",
+          kind: "start",
+          blocks: [
+            action("seek", "motion.seek", {
+              timeline: literal("track"),
+              time: literal(1),
+            }),
+            {
+              id: "store",
+              kind: "set",
+              variable: "cursor",
+              value: field(
+                getter("motion.status", { timeline: literal("track") }),
+                "elapsed",
+                "number",
+              ),
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  const game = new Game(project);
+  game.advance(STEP);
+  expect(game.getVariables(actor.id)?.get("cursor")).toBe(1);
+  expect(game.getEntity(actor.id)?.transform.x).toBeCloseTo(100 + 100 * STEP);
+});

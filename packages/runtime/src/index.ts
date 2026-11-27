@@ -510,8 +510,7 @@ export class Game {
       throw Error("The UI event is missing or has the wrong payload type.");
     this.scheduler.queueUi(id, payload);
     this.triggerSceneSignal(id, source ?? this.scene.id);
-    this.screens.signal(id, source ?? this.scene.id, screen);
-    if (this.screens.paused) this.input.clear();
+    this.routeUi(id, source ?? this.scene.id, screen);
   }
 
   get uiScreens() {
@@ -519,6 +518,12 @@ export class Game {
   }
   get gameplayPaused() {
     return this.screens.paused;
+  }
+
+  private routeUi(id: string, scene: string, screen?: string) {
+    const affected = this.screens.signal(id, scene, screen);
+    if (affected) this.runtimeEvent("screen.changed", affected);
+    if (this.screens.paused) this.input.clear();
   }
 
   controlUi(command: UiCommand, scene = this.scene.id) {
@@ -1183,7 +1188,7 @@ export class Game {
         else this.scheduler.emit(id, value);
         const sceneId = source()?.sceneId ?? this.scene.id;
         this.triggerSceneSignal(id, sceneId);
-        this.screens.signal(id, sceneId);
+        this.routeUi(id, sceneId);
       },
       runtimeRead: (member, target) =>
         this.readRuntimeProperty(this.runtimeTarget(state, target), member),

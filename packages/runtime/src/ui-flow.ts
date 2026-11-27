@@ -216,7 +216,9 @@ export class UiFlowWorld {
         (route) => route.signalId === id && route.sourceId === source,
       ) ??
       routes?.find((route) => route.signalId === id && route.sourceId === null);
-    if (route) this.command(route, scene);
+    if (!route) return;
+    this.command(route, scene);
+    return route.screenId ?? route.action;
   }
   advance(seconds: number) {
     for (const item of this.instances.values()) {
