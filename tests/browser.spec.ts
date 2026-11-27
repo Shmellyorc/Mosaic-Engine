@@ -566,6 +566,17 @@ test("edits and saves each world workspace, and opens assets without applying th
     await field.press("Enter");
     await expect(field).toHaveValue(value);
   };
+  const clickWorkshop = async (tool: string, x: number, y: number) => {
+    const box = (await page
+      .getByLabel(tool + " viewport", { exact: true })
+      .boundingBox())!;
+    const scale = Math.min(box.width / 640, box.height / 360);
+    // The authored Workshop camera centers on (320, 192) at zoom 1.24.
+    await page.mouse.click(
+      box.x + box.width / 2 + (x - 320) * 1.24 * scale,
+      box.y + box.height / 2 + (y - 192) * 1.24 * scale,
+    );
+  };
 
   await projectTree
     .getByRole("button", { name: "Ridge panorama", exact: true })
@@ -589,9 +600,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await terrain.press("Enter");
   await inspector.getByLabel("Solid terrain").check();
   await number("Traversal cost", "7");
-  const tilemap = page.getByLabel("Tilemap viewport", { exact: true });
-  const box = (await tilemap.boundingBox())!;
-  await page.mouse.click(box.x + box.width * 0.83, box.y + box.height * 0.24);
+  await clickWorkshop("Tilemap", 544, 128);
 
   await workspace("Physics");
   await expect(page.getByTestId("physics-overlay")).toBeVisible();
@@ -623,10 +632,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await expect(
     page.getByRole("button", { name: "Click Destination" }),
   ).toHaveAttribute("aria-pressed", "true");
-  const nav = (await page
-    .getByLabel("Navigation viewport", { exact: true })
-    .boundingBox())!;
-  await page.mouse.click(nav.x + nav.width * 0.56, nav.y + nav.height * 0.74);
+  await clickWorkshop("Navigation", 416, 264);
   await expect(pick).toBeVisible();
 
   await workspace("Lighting");
@@ -901,7 +907,10 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
   await expect(page.getByLabel("Timeline name")).toHaveValue("Orbit test");
   await expect(byName("Key at 1 seconds")).toBeVisible();
   await workspace("Audio");
-  await byName("field-tone.wav").click();
+  await page
+    .getByRole("tabpanel", { name: "Audio Mixer" })
+    .getByRole("button", { name: "field-tone.wav", exact: true })
+    .click();
   await expect(
     page.getByLabel("Sound output bus").locator("option:checked"),
   ).toHaveText("Field Recordings");
@@ -1068,7 +1077,10 @@ test("authors and reopens typed data, then reads a sheet field through a Bluepri
   await enter("welcome es translation", "Bienvenido a la cumbre");
 
   await workspace("Scene");
-  await button("Entity").click();
+  await page
+    .getByRole("complementary", { name: "Hierarchy", exact: true })
+    .getByRole("button", { name: "Entity", exact: true })
+    .click();
   await workspace("Blueprints");
   await button("New Blueprint").click();
   await page.getByLabel("Add block", { exact: true }).selectOption("log");
