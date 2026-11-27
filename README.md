@@ -36,6 +36,16 @@ Use **File → Open Lantern Courier** or **File → Open Beacon Circuit**, then 
 
 The build writes `dist/lantern-courier.html` and `dist/beacon-circuit.html` for offline play, plus matching `.mosaic.json` documents for authoring. The HTML player offers both renderers and an **Enable audio** control. CI publishes the four files together in the **playable-example-games** artifact.
 
+## Build entity hierarchies and prefabs
+
+Drag an entity onto a parent in **Hierarchy**, or drop it onto the scene to make it a root. Reparenting keeps the authored local transform. Physics and navigation agents use root entities. The **Inspector** controls visual, physics, navigation, lighting, particles, camera, tile-layer ownership, audio, and behavior components.
+
+Use **Save as prefab** on a selected entity to capture its hierarchy. Select the prefab in **Project** and choose **Instantiate prefab** to insert a linked copy. Changes to inherited properties can be published from an instance with **Apply to prefab**. Other instances receive the revised defaults where their properties still match the previous definition. Use **Reset override** to restore an individual property. Blueprint references to entities inside the prefab resolve to members of the current instance.
+
+Under **Behaviour**, retain a primary Blueprint and attach additional instances. Every attachment has independent variables and can be enabled or disabled. Expose variables in the Blueprint inspector to override their defaults per attachment. Declared component dependencies are checked before the attachment runs. Editing a Blueprint preserves compatible live variables in each instance. Adding or enabling an attachment starts that instance.
+
+Projects using these additions save as format 2. The editor and runtime continue to read older format 1 projects and interpret single Blueprint assignments as primary attachments. Renderer-independent component storage uses generational runtime handles and cached component queries. Saved documents continue to reference entities and assets by stable IDs.
+
 ## Blueprint execution
 
 - Use **Functions** in the Inspector to define parameters and a return type. **Call Function** passes typed arguments and can store the result in a variable. **Declare Local** scopes a value to the rest of its stack and its nested blocks. Entity variables retain one value per runtime entity.

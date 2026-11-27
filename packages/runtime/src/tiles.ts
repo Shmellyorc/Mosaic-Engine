@@ -133,7 +133,10 @@ export class TileWorld {
   readonly legacy: TileGrid;
   readonly layers: { definition: TileLayer; grid: TileGrid }[];
   private terrains: Map<string, Terrain>;
-  constructor(readonly map: Scene["tilemap"]) {
+  constructor(
+    readonly map: Scene["tilemap"],
+    private enabled: (layerId: string) => boolean = () => true,
+  ) {
     const grid = (tiles: Tile[]) =>
       new TileGrid(map.width, map.height, map.size, tiles);
     this.legacy = grid(map.tiles);
@@ -167,7 +170,8 @@ export class TileWorld {
     };
     this.legacy.forArea(area, use);
     for (const { definition, grid } of this.layers)
-      if (definition.collision) grid.forArea(area, use);
+      if (definition.collision && this.enabled(definition.id))
+        grid.forArea(area, use);
   }
   navigationCost(x: number, y: number) {
     let cost = 1;
@@ -177,6 +181,7 @@ export class TileWorld {
       cost = this.cost(base);
     }
     for (const { definition, grid } of this.layers) {
+      if (!this.enabled(definition.id)) continue;
       const tile = grid.at(x, y);
       if (!tile) continue;
       if (definition.collision && this.solid(tile)) return 0;

@@ -312,10 +312,18 @@ function MixerEditor() {
                   className="push danger"
                   aria-label="Delete sound"
                   onClick={() =>
-                    edit((draft) => {
-                      draft.sounds = draft.sounds.filter(
+                    useEditor.getState().edit((project) => {
+                      if (!project.mixer) return;
+                      project.mixer.sounds = project.mixer.sounds.filter(
                         ({ id }) => id !== sound.id,
                       );
+                      for (const group of [
+                        ...project.scenes,
+                        ...(project.prefabs ?? []),
+                      ])
+                        for (const entity of group.entities)
+                          if (entity.audio?.soundId === sound.id)
+                            delete entity.audio;
                     })
                   }
                 >

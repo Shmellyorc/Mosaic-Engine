@@ -415,13 +415,32 @@ const eventSchema = z.object({
   signalId: id.optional(),
   blocks: blocks(),
 });
+export const blueprintDependencies = z.enum([
+  "visual",
+  "body",
+  "navigation",
+  "light",
+  "animator",
+  "particles",
+  "camera",
+  "tileLayers",
+  "audio",
+]);
 export const blueprintSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]),
   id,
   name: id,
-  variables: z.array(parameterSchema.extend({ initial: value })).max(500),
+  variables: z
+    .array(
+      parameterSchema.extend({
+        initial: value,
+        exposed: z.boolean().optional(),
+      }),
+    )
+    .max(500),
   events: z.array(eventSchema).max(80),
   functions: z.array(functionSchema).max(100).optional(),
+  requires: z.array(blueprintDependencies).max(9).optional(),
 });
 export type Blueprint = z.infer<typeof blueprintSchema>;
 export type Signal = z.infer<typeof signalSchema>;

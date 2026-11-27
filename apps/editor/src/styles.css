@@ -1954,3 +1954,33 @@ button.tree-row {
 .profiler-counters dd {
   margin: 0;
 }
+
+.attachment-list,
+.attachment-card,
+.attachment-variable {
+  display: grid;
+  gap: 7px;
+}
+
+.attachment-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: #1c1d2b;
+}
+
+.attachment-card > summary,
+.component-choice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.attachment-card > summary {
+  cursor: pointer;
+  margin-bottom: 5px;
+}
+
+.component-choice {
+  padding-block: 2px;
+}

@@ -12,12 +12,25 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { createEntity, createScene, newId, type Entity } from "@mosaic/model";
+import { useMemo, useState, type DragEvent } from "react";
+import {
+  createEntity,
+  createScene,
+  hierarchyIds,
+  newId,
+  reparentEntity,
+  primaryAttachmentId,
+  type Entity,
+} from "@mosaic/model";
 import { resizeMap, WorldInspector } from "./world";
 import { BlueprintInspector, revealBlock, symbolName } from "./blueprint";
 import { displayValue, typeOf } from "@mosaic/blueprints";
 import { Field, NumberField, Section, TextField } from "./controls";
+import {
+  BlueprintAttachments,
+  ComponentInspector,
+  insertPrefab,
+} from "./entity-components";
 import { playGame, stepBlueprint } from "./play";
 import {
   chooseEntity,
@@ -77,6 +90,20 @@ function removeEntity(id: string) {
     if (!entity) return;
     scene.entities = scene.entities.filter((item) => item.id !== id);
     for (const child of scene.entities) {
+      for (const attachment of child.attachments ?? [])
+        for (const value of Object.values(attachment.overrides ?? {})) {
+          if (typeof value !== "object") continue;
+          if (value.kind === "entity" && value.id === id) value.id = "";
+          if (value.kind === "record")
+            for (const field of Object.values(value.fields))
+              if (
+                field &&
+                typeof field === "object" &&
+                field.kind === "entity" &&
+                field.id === id
+              )
+                field.id = "";
+        }
       if (child.parentId === id) child.parentId = entity.parentId;
       if (child.navigation?.target === id) child.navigation.target = null;
     }
@@ -102,6 +129,7 @@ export function ProjectPanel() {
   const blueprint = useEditor((state) => state.blueprintId);
   const asset = useEditor((state) => state.selectedAssetId);
   const [query, setQuery] = useState("");
+  const [prefabId, setPrefabId] = useState("");
   const matches = (name: string) =>
     name.toLowerCase().includes(query.toLowerCase());
   return (
@@ -177,6 +205,33 @@ export function ProjectPanel() {
           <small className="tree-empty">No blueprints</small>
         )}
       </details>
+      {!!project.prefabs?.length && (
+        <details open className="tree-group">
+          <summary>
+            <Folder size={15} /> Prefabs
+          </summary>
+          {project.prefabs
+            .filter(({ name }) => matches(name))
+            .map((prefab) => (
+              <button
+                key={prefab.id}
+                className={`tree-row ${prefab.id === prefabId ? "selected" : ""}`}
+                onClick={() => setPrefabId(prefab.id)}
+              >
+                <Box size={15} />
+                <span>{prefab.name}.prefab</span>
+              </button>
+            ))}
+          {project.prefabs.some(({ id }) => id === prefabId) && (
+            <button
+              className="section-button"
+              onClick={() => insertPrefab(prefabId)}
+            >
+              Instantiate prefab
+            </button>
+          )}
+        </details>
+      )}
       <details open className="tree-group">
         <summary>
           <Folder size={15} /> Assets
@@ -319,6 +374,29 @@ export function AssetPanel({ onImport }: { onImport: () => void }) {
   );
 }
 
+const entityDrag = "application/x-mosaic-entity";
+function moveInHierarchy(id: string, parentId: string | null) {
+  const state = useEditor.getState();
+  const scene = selectedScene(state);
+  const entity = scene.entities.find((item) => item.id === id);
+  if (!entity || entity.parentId === parentId) return;
+  let moved = false;
+  editScene((draft) => {
+    moved = reparentEntity(draft, id, parentId);
+  });
+  if (!moved)
+    state.report(
+      "Choose a parent outside this branch. Physics and navigation require scene roots.",
+      "error",
+    );
+}
+function dropEntity(event: DragEvent, parentId: string | null) {
+  if (!event.dataTransfer.types.includes(entityDrag)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  moveInHierarchy(event.dataTransfer.getData(entityDrag), parentId);
+}
+
 export function HierarchyPanel() {
   const scene = useEditor(selectedScene);
   const entityId = useEditor((state) => state.entityId);
@@ -363,6 +441,11 @@ export function HierarchyPanel() {
       <button
         className={`tree-row ${!entityId ? "selected" : ""}`}
         onClick={() => chooseEntity(undefined)}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes(entityDrag))
+            event.preventDefault();
+        }}
+        onDrop={(event) => dropEntity(event, null)}
       >
         <Layers3 size={15} />
         {scene.name}
@@ -393,6 +476,11 @@ export function HierarchyPanel() {
             key={row.entity.id}
             className={`hierarchy-row ${row.entity.id === entityId ? "selected" : ""}`}
             style={{ paddingLeft: Math.min(9, row.depth) * 13 }}
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes(entityDrag))
+                event.preventDefault();
+            }}
+            onDrop={(event) => dropEntity(event, row.entity.id)}
           >
             {row.children ? (
               <button
@@ -422,6 +510,11 @@ export function HierarchyPanel() {
             )}
             <button
               className="tree-row"
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData(entityDrag, row.entity.id);
+                event.dataTransfer.effectAllowed = "move";
+              }}
               onClick={() => chooseEntity(row.entity)}
             >
               <Box size={15} />
@@ -465,19 +558,7 @@ function EntityInspector() {
   const assets = useEditor((state) => state.project.assets);
   const blueprints = useEditor((state) => state.project.blueprints);
   if (!entity) return <SceneSettings />;
-  const descendants = new Set([entity.id]);
-  const pending = [...scene.entities];
-  for (let changed = true; changed;) {
-    changed = false;
-    for (let i = pending.length - 1; i >= 0; i--) {
-      const candidate = pending[i];
-      if (candidate.parentId && descendants.has(candidate.parentId)) {
-        descendants.add(candidate.id);
-        pending.splice(i, 1);
-        changed = true;
-      }
-    }
-  }
+  const descendants = hierarchyIds(scene.entities, entity.id);
   const visual = entity.visual;
   return (
     <div className="panel-body inspector">
@@ -508,9 +589,7 @@ function EntityInspector() {
             value={entity.parentId ?? ""}
             disabled={!!entity.body || !!entity.navigation}
             onChange={(event) =>
-              editEntity((draft) => {
-                draft.parentId = event.target.value || null;
-              })
+              moveInHierarchy(entity.id, event.target.value || null)
             }
           >
             <option value="">Scene root</option>
@@ -721,6 +800,7 @@ function EntityInspector() {
             onClick={() =>
               useEditor.setState({
                 blueprintId: entity.blueprintId,
+                attachmentId: primaryAttachmentId,
                 workspace: "Blueprints",
                 eventId: null,
                 selectedTile: null,
@@ -730,7 +810,9 @@ function EntityInspector() {
             <Code2 size={14} /> Edit Blueprint
           </button>
         )}
+        <BlueprintAttachments entity={entity} blueprints={blueprints} />
       </Section>
+      <ComponentInspector entity={entity} scene={scene} />
       <button
         className="danger section-button"
         onClick={() => removeEntity(entity.id)}
@@ -958,7 +1040,8 @@ export function ConsolePanel() {
                   );
                   revealBlock(
                     state.project.blueprints.find(
-                      (item) => item.id === entity?.blueprintId,
+                      (item) =>
+                        item.id === (entry.blueprintId ?? entity?.blueprintId),
                     ),
                     entry.blockId!,
                   );
@@ -981,10 +1064,21 @@ export function ConsolePanel() {
 export function DebugPanel() {
   const snapshot = useEditor((state) => state.snapshot);
   const entity = useEditor(selectedEntity);
+  const attachmentId = useEditor((state) => state.attachmentId);
+  const attachment =
+    entity?.attachments?.find(
+      ({ id, enabled }) => id === attachmentId && enabled,
+    ) ??
+    (!entity?.blueprintId
+      ? entity?.attachments?.find(({ enabled }) => enabled)
+      : undefined);
   const blueprint = useEditor((state) =>
     state.project.blueprints.find(
       (item) =>
-        item.id === (snapshot.pause?.blueprintId ?? entity?.blueprintId),
+        item.id ===
+        (snapshot.pause?.blueprintId ??
+          attachment?.blueprintId ??
+          entity?.blueprintId),
     ),
   );
   const transport = useEditor((state) => state.transport);

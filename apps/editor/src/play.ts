@@ -16,7 +16,14 @@ function publishSnapshot(game: Game, entityId: string | null) {
     snapshot: {
       blocks: [...game.activeBlocks],
       variables: focus
-        ? [...(game.getVariables(focus) ?? [])].map(([id, value]) => ({
+        ? [
+            ...(game.getVariables(
+              focus,
+              pause?.attachmentId ??
+                useEditor.getState().attachmentId ??
+                undefined,
+            ) ?? []),
+          ].map(([id, value]) => ({
             id,
             value,
           }))
@@ -44,13 +51,15 @@ function showPause(game: Game) {
   if (
     current.transport !== "paused" ||
     pause.blockId !== current.snapshot.pause?.blockId ||
-    pause.entityId !== current.snapshot.pause?.entityId
+    pause.entityId !== current.snapshot.pause?.entityId ||
+    pause.attachmentId !== current.snapshot.pause?.attachmentId
   ) {
     useEditor.setState({
       transport: "paused",
       workspace: "Blueprints",
       entityId: pause.entityId,
       blueprintId: pause.blueprintId,
+      attachmentId: pause.attachmentId,
       eventId: pause.entryId,
       selectedTile: pause.blockId,
     });

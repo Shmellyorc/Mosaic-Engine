@@ -56,6 +56,9 @@ export class NavigationGrid {
         : [],
     );
   }
+  invalidate() {
+    this.grids.clear();
+  }
   private costs(width: number, height: number) {
     const key = width + "," + height;
     const cached = this.grids.get(key);
@@ -201,6 +204,10 @@ export class NavigationWorld {
           entity.body?.kind !== "static",
       )
       .map((entity) => ({ entity, goalCell: -2, path: [], next: 0 }));
+  }
+  invalidate() {
+    this.grid.invalidate();
+    for (const agent of this.agents) agent.goalCell = -2;
   }
   step(seconds: number, physics: PhysicsWorld) {
     for (const agent of this.agents) {

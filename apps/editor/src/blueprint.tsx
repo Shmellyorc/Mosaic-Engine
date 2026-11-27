@@ -36,6 +36,7 @@ import {
 } from "react";
 import {
   compileBlueprint,
+  blueprintDependencies,
   children as blockChildren,
   displayValue,
   parseExpression,
@@ -2729,7 +2730,44 @@ export function BlueprintInspector() {
           />
         </Field>
       </Section>
+      <Section title="Required components">
+        {blueprintDependencies.options.map((key) => (
+          <label className="component-choice" key={key}>
+            <input
+              type="checkbox"
+              checked={blueprint.requires?.includes(key) ?? false}
+              aria-label={"Require " + key}
+              onChange={(event) =>
+                editBlueprint((draft) => {
+                  draft.requires = event.target.checked
+                    ? [...(draft.requires ?? []), key]
+                    : draft.requires?.filter((value) => value !== key);
+                })
+              }
+            />
+            {key}
+          </label>
+        ))}
+      </Section>
       <Section title="Variables">
+        {blueprint.variables.map((variable) => (
+          <label className="component-choice" key={variable.id}>
+            <input
+              type="checkbox"
+              checked={variable.exposed ?? false}
+              aria-label={"Expose " + variable.name}
+              onChange={(event) =>
+                editBlueprint((draft) => {
+                  const record = draft.variables.find(
+                    ({ id }) => id === variable.id,
+                  );
+                  if (record) record.exposed = event.target.checked;
+                })
+              }
+            />
+            Expose {variable.name} to attachments
+          </label>
+        ))}
         {blueprint.variables.map((variable) => (
           <div
             className={`variable-entry ${typeof variable.initial === "object" ? "compound-variable" : ""}`}

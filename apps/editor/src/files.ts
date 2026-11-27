@@ -2,6 +2,8 @@ import { imageDimensions } from "./asset-audit";
 import { compileBlueprint } from "@mosaic/blueprints";
 import {
   MAX_IMAGE_BYTES,
+  attachmentBlueprints,
+  entityComponents,
   MAX_PROJECT_BYTES,
   MAX_SOUND_BYTES,
   MASTER_BUS,
@@ -233,11 +235,25 @@ export async function exportGame() {
   const project = useEditor.getState().project;
   const data = indexCatalog(project.data ?? createCatalog());
   const axes = new Set(project.input.map((axis) => axis.id));
-  const assigned = new Set(
-    project.scenes.flatMap((scene) =>
-      scene.entities.map((entity) => entity.blueprintId),
-    ),
+  const definitions = new Map(
+    project.blueprints.map((blueprint) => [blueprint.id, blueprint]),
   );
+  const assigned = new Set<string>();
+  for (const group of [...project.scenes, ...(project.prefabs ?? [])])
+    for (const entity of group.entities)
+      for (const id of attachmentBlueprints(entity)) {
+        assigned.add(id);
+        const missing = definitions
+          .get(id)
+          ?.requires?.find(
+            (key) =>
+              !entityComponents
+                .find((component) => component.key === key)
+                ?.present(entity),
+          );
+        if (missing)
+          throw Error(`${entity.name} requires the ${missing} component.`);
+      }
   for (const blueprint of project.blueprints) {
     if (!assigned.has(blueprint.id)) continue;
     const [diagnostic] = compileBlueprint(

@@ -12,9 +12,11 @@ import {
 type Program = ReturnType<typeof compileBlueprint>;
 export type Binding = {
   id: string;
+  attachmentId: string;
   blueprintId: string;
   program: Program;
   context: BlueprintContext;
+  overrides?: Record<string, Value>;
 };
 type Entry = Program["entries"][number];
 type Job = {
@@ -35,6 +37,7 @@ type Delivery = {
 type Pause = { job: Job; visit: BlockVisit };
 export type BlueprintPause = ReturnType<typeof inspectVisit> & {
   entityId: string;
+  attachmentId: string;
   blueprintId: string;
   blockId: string;
   entryId: string;
@@ -84,9 +87,9 @@ export class BlueprintScheduler {
       this.deliveries = this.deliveries.filter(
         ({ source }) => !changed.has(source),
       );
-      const changedEntities = new Set(Array.from(changed, ({ id }) => id));
+      const remaining = new Set(bindings.map(({ id }) => id));
       this.contacts = this.contacts.filter(
-        ({ entityId }) => !entityId || !changedEntities.has(entityId),
+        ({ entityId }) => !entityId || remaining.has(entityId),
       );
       if (this.pause && changed.has(this.pause.job.binding))
         this.pause = undefined;
@@ -210,6 +213,7 @@ export class BlueprintScheduler {
     const { job, visit } = this.pause;
     return {
       entityId: job.binding.id,
+      attachmentId: job.binding.attachmentId,
       blueprintId: job.binding.blueprintId,
       blockId: visit.blockId,
       entryId: visit.entryId,

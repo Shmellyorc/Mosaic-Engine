@@ -22,6 +22,10 @@ import {
 } from "@mosaic/blueprints";
 import {
   emptySignals,
+  primaryAttachmentId,
+  type BlueprintAttachment,
+  type ComponentName,
+  entityComponents,
   type Entity,
   type Frame,
   type Project,
@@ -41,6 +45,8 @@ import {
 } from "./tiles";
 import { PhysicsWorld } from "./physics";
 import { SpatialGrid } from "./spatial";
+import { EntityStore, type EntityHandle } from "./entities";
+export type { EntityHandle } from "./entities";
 import { NavigationGrid, NavigationWorld } from "./navigation";
 import { AnimationPlayer, MotionWorld } from "./motion";
 import { ParticleWorld } from "./particles";
@@ -75,6 +81,8 @@ export type RuntimeLog = {
   message: string;
   blockId?: string;
   entityId?: string;
+  blueprintId?: string;
+  attachmentId?: string;
 };
 export type Draw = {
   matrix: Matrix2D;
@@ -107,7 +115,7 @@ export type RenderFrame = {
 };
 type WorldEntity = {
   entity: Entity;
-  variables: Map<string, Value>;
+
   animation?: AnimationPlayer;
   parent?: WorldEntity;
   rank: number;
@@ -149,7 +157,12 @@ function instantiateEntity(source: Entity): Entity {
     source.body ||
     source.navigation ||
     source.light ||
-    source.particles
+    source.particles ||
+    source.attachments ||
+    source.camera ||
+    source.tileLayers ||
+    source.audio ||
+    source.prefab
   )
     return structuredClone(source);
   return {
@@ -294,7 +307,11 @@ export class Game {
   scene: Scene;
   private scheduler: BlueprintScheduler;
   private reported = new Set<string>();
-  private world = new Map<string, WorldEntity>();
+  private world = new EntityStore<WorldEntity>();
+  private prefabMembers = new Map<string, Map<string, string>>();
+  private componentCamera?: Entity;
+  private tileOwners = new Map<string, Entity>();
+  private tileVisibilityChanged = false;
   private assets: Set<string>;
   private entities: WorldEntity[];
   private hierarchy: WorldEntity[] = [];
@@ -303,6 +320,7 @@ export class Game {
   private renderIndex = new SpatialGrid<WorldEntity>(128, 192);
   private renderCandidates = new Set<WorldEntity>();
   private program: Binding[] = [];
+  private bindingsByEntity = new Map<string, Binding[]>();
   private documents = new Map<string, Blueprint>();
   private signals: readonly Signal[];
   private tickPending = false;
@@ -351,7 +369,7 @@ export class Game {
     this.scene = scene;
     this.input = new InputState(project.input);
     this.data = new GameData(project.id, project.data, slots);
-    this.tiles = new TileWorld(scene.tilemap);
+    this.tiles = this.createTiles(scene);
     this.scheduler = new BlueprintScheduler(STEP, debug);
     this.ui = this.createUi(scene);
     this.assets = new Set(project.assets.map((asset) => asset.id));
@@ -368,16 +386,19 @@ export class Game {
       const entity = instantiateEntity(source);
       const state: WorldEntity = {
         entity,
-        variables: new Map(),
         rank,
         pose: pose(),
         animation: this.animationFor(entity),
       };
-      this.world.set(entity.id, state);
+      this.world.add(state);
       return state;
     });
     const entities = this.entities.map(({ entity }) => entity);
-    this.physics = new PhysicsWorld(entities, this.tiles, scene.gravity);
+    this.physics = new PhysicsWorld(
+      this.componentRows("body"),
+      this.tiles,
+      scene.gravity,
+    );
     this.navigation = new NavigationWorld(
       new NavigationGrid(this.tiles, entities),
       entities,
@@ -386,9 +407,10 @@ export class Game {
       scene.timelines ?? [],
       (id) => this.world.get(id)?.entity,
     );
-    this.particles = new ParticleWorld(entities);
+    this.particles = new ParticleWorld(this.componentRows("particles"));
     this.soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
-    this.lights = this.entities.filter(({ entity }) => entity.light);
+    this.lights = [];
+    this.refreshComponents();
     this.layerVisible = new Map(
       scene.layers.map((layer) => [layer.id, layer.visible]),
     );
@@ -449,7 +471,6 @@ export class Game {
     let rebuildNavigation = false;
     let rebuildParticles = false;
     let rebind = false;
-    const added = new Set<string>();
     const keepVelocity = new Set<string>();
     if (
       oldScene.entities !== scene.entities ||
@@ -458,7 +479,7 @@ export class Game {
       const oldById = new Map(
         oldScene.entities.map((entity) => [entity.id, entity]),
       );
-      const nextById = new Map<string, WorldEntity>();
+      const nextIds = new Set(scene.entities.map(({ id }) => id));
       const next = [...scene.entities].sort(
         (a, b) =>
           this.layerOrder.get(a.layerId)! - this.layerOrder.get(b.layerId)! ||
@@ -473,14 +494,16 @@ export class Game {
             entity,
             rank,
             pose: pose(),
-            variables: new Map(),
             animation: this.animationFor(entity),
           };
-          added.add(source.id);
           rebuildNavigation = true;
           rebuildWorld ||= !!source.body || !!source.navigation;
           rebuildParticles ||= !!source.particles;
-          rebind ||= !!source.blueprintId;
+          rebind ||= !!source.blueprintId || !!source.attachments?.length;
+          this.world.add(state);
+          if (source.tileLayers?.length) this.tileVisibilityChanged = true;
+          if (this.started && entity.audio?.autoplay)
+            this.queueAudio(entity.audio.soundId, true, entity.id);
         } else {
           // A valid layer, visibility, and pose can change without replacing the state instance.
           const { entity, pose } = state;
@@ -533,34 +556,67 @@ export class Game {
             entity.particles = structuredClone(source.particles);
             rebuildParticles = true;
           }
-          if (authored.blueprintId !== source.blueprintId) rebind = true;
+          if (
+            authored.tileLayers !== source.tileLayers ||
+            (source.tileLayers?.length && authored.visible !== source.visible)
+          )
+            this.tileVisibilityChanged = true;
+          if (authored.audio !== source.audio && this.started) {
+            if (entity.audio)
+              this.queueAudio(entity.audio.soundId, false, entity.id);
+            if (source.audio?.autoplay)
+              this.queueAudio(source.audio.soundId, true, entity.id);
+          }
+          for (const key of [
+            "attachments",
+            "audio",
+            "camera",
+            "tileLayers",
+            "prefab",
+            "persistent",
+          ] as const)
+            if (source[key] !== authored[key])
+              Object.assign(entity, { [key]: source[key] });
+
+          const membershipChanged =
+            authored !== source && this.world.update(source.id);
+          if (
+            authored.blueprintId !== source.blueprintId ||
+            authored.attachments !== source.attachments ||
+            ((source.blueprintId || source.attachments?.length) &&
+              membershipChanged)
+          )
+            rebind = true;
         }
         state.rank = rank;
-        nextById.set(source.id, state);
         return state;
       });
       for (const [id, state] of this.world) {
-        if (nextById.has(id)) continue;
+        if (nextIds.has(id)) continue;
+        if (this.started && state.entity.audio)
+          this.queueAudio(state.entity.audio.soundId, false, id);
+        this.world.remove(id);
+        if (state.entity.tileLayers?.length) this.tileVisibilityChanged = true;
         rebuildNavigation = true;
         this.motion.removeEntity(id);
         this.renderIndex.remove(state);
         rebuildWorld ||= !!state.entity.body || !!state.entity.navigation;
         rebuildParticles ||= !!state.entity.particles;
-        rebind ||= !!state.entity.blueprintId;
+        rebind ||=
+          !!state.entity.blueprintId || !!state.entity.attachments?.length;
       }
-      this.world = nextById;
-      this.lights = this.entities.filter(({ entity }) => entity.light);
+      this.refreshComponents();
       this.buildHierarchy();
     } else if (rebuildWorld) {
       for (const { entity } of this.entities) keepVelocity.add(entity.id);
     }
     if (oldScene.tilemap !== scene.tilemap)
-      this.tiles = new TileWorld(scene.tilemap);
+      this.tiles = this.createTiles(scene);
     if (rebuildWorld || rebuildNavigation || rebuildParticles) {
       const entities = this.entities.map(({ entity }) => entity);
       if (rebuildWorld) {
         this.physics = new PhysicsWorld(
-          entities,
+          this.componentRows("body"),
           this.tiles,
           scene.gravity,
           this.physics,
@@ -572,7 +628,8 @@ export class Game {
           new NavigationGrid(this.tiles, entities),
           entities,
         );
-      if (rebuildParticles) this.particles.reload(entities);
+      if (rebuildParticles)
+        this.particles.reload(this.componentRows("particles"));
     }
     if (oldScene.timelines !== scene.timelines)
       this.motion.reload(scene.timelines ?? [], this.started);
@@ -591,8 +648,6 @@ export class Game {
           axesChanged ||
           previous.extensions !== project.extensions,
       );
-      if (this.started && added.size)
-        this.scheduler.start(this.program.filter(({ id }) => added.has(id)));
     }
     return true;
   }
@@ -611,37 +666,59 @@ export class Game {
     const documents = new Map(
       blueprints.map((blueprint) => [blueprint.id, blueprint]),
     );
-    const previous = new Map(
-      this.program.map((binding) => [binding.id, binding]),
-    );
-    const changed = new Set<Binding>();
+    const bindings = new Map<string, Map<string, Binding>>();
+    for (const binding of this.program) {
+      const row = bindings.get(binding.id) ?? new Map<string, Binding>();
+      row.set(binding.attachmentId, binding);
+      bindings.set(binding.id, row);
+    }
+    const retained = new Set<Binding>();
+    const pendingStart: Binding[] = [];
     const axes = new Set(this.project.input.map((axis) => axis.id));
     const compiled = new Map<string, Binding["program"]>();
     const sameSignals = signals === this.signals;
-    this.program = this.entities.flatMap((state) => {
-      const id = state.entity.blueprintId;
-      const old = previous.get(state.entity.id);
-      const definition = id && documents.get(id);
+    const next: Binding[] = [];
+    const attach = (
+      state: WorldEntity,
+      attachmentId: string,
+      definitionId: string,
+      overrides?: BlueprintAttachment["overrides"],
+    ) => {
+      const entityId = state.entity.id;
+      const definition = documents.get(definitionId);
+      if (!definition) return;
+      const missing = definition.requires?.find(
+        (key) =>
+          !entityComponents
+            .find((component) => component.key === key)
+            ?.present(state.entity),
+      );
+      if (missing) {
+        this.fault(
+          entityId,
+          {
+            blockId: definition.id,
+            message: "Missing required " + missing + " component.",
+          },
+          definitionId,
+          attachmentId,
+        );
+        return;
+      }
+      const old = bindings.get(entityId)?.get(attachmentId);
+      const sameBinding = old?.blueprintId === definitionId;
       if (
-        old &&
-        old.blueprintId === (definition && definition.id) &&
+        sameBinding &&
+        old.overrides === overrides &&
         !force &&
         sameSignals &&
-        definition &&
-        definition === this.documents.get(definition.id)
-      )
-        return [old];
-      if (old) {
-        changed.add(old);
-        for (const key of this.reported)
-          if (key.startsWith(JSON.stringify(state.entity.id) + "|"))
-            this.reported.delete(key);
+        definition === this.documents.get(definitionId)
+      ) {
+        retained.add(old);
+        next.push(old);
+        return;
       }
-      if (!definition) {
-        if (old) state.variables = new Map();
-        return [];
-      }
-      let program = compiled.get(definition.id);
+      let program = compiled.get(definitionId);
       if (!program) {
         program = compileBlueprint(
           definition,
@@ -650,28 +727,62 @@ export class Game {
           this.data.index,
           this.project.extensions,
         );
-        compiled.set(definition.id, program);
+        compiled.set(definitionId, program);
       }
       const variables = program.createVariables();
-      for (const [key, initial] of variables) {
-        const value = state.variables.get(key);
-        if (value !== undefined && typeOf(value) === typeOf(initial))
-          variables.set(key, value);
+      for (const variable of definition.variables) {
+        const id = variable.id;
+        const override =
+          overrides && Object.hasOwn(overrides, id) ? overrides[id] : undefined;
+        const prior = sameBinding ? old.context.variables.get(id) : undefined;
+        const oldOverride =
+          sameBinding && old.overrides && Object.hasOwn(old.overrides, id)
+            ? old.overrides[id]
+            : undefined;
+        if (variable.exposed && override !== oldOverride) {
+          if (override !== undefined && typeOf(override) === variable.type)
+            variables.set(id, override);
+        } else if (prior !== undefined && typeOf(prior) === variable.type)
+          variables.set(id, prior);
       }
-      state.variables = variables;
       for (const diagnostic of program.diagnostics)
-        this.fault(state.entity.id, diagnostic);
-      return [
-        {
-          id: state.entity.id,
-          blueprintId: definition.id,
-          program,
-          context: this.context(state),
-        },
-      ];
-    });
-    for (const old of previous.values()) {
-      if (!this.world.has(old.id)) changed.add(old);
+        this.fault(entityId, diagnostic, definitionId, attachmentId);
+      const binding: Binding = {
+        id: entityId,
+        attachmentId,
+        blueprintId: definitionId,
+        program,
+        overrides,
+        context: this.context(state, variables, definitionId, attachmentId),
+      };
+      next.push(binding);
+      if (!sameBinding) pendingStart.push(binding);
+    };
+    const active = [...this.world.query("blueprints")].sort(
+      (a, b) => a.rank - b.rank,
+    );
+    for (const state of active) {
+      const { blueprintId, attachments } = state.entity;
+      if (blueprintId) attach(state, primaryAttachmentId, blueprintId);
+      for (const attachment of attachments ?? []) {
+        if (attachment.enabled)
+          attach(
+            state,
+            attachment.id,
+            attachment.blueprintId,
+            attachment.overrides,
+          );
+      }
+    }
+    const changed = new Set(
+      this.program.filter((binding) => !retained.has(binding)),
+    );
+    this.program = next;
+    this.bindingsByEntity = new Map();
+    for (const binding of next) {
+      const row = this.bindingsByEntity.get(binding.id) ?? [];
+      row.push(binding);
+      this.bindingsByEntity.set(binding.id, row);
     }
     this.documents = documents;
     this.signals = signals;
@@ -679,13 +790,19 @@ export class Game {
       signals.map((signal) => [signal.id, signal.type]),
     );
     this.scheduler.configure(this.program, changed);
+    if (this.started && pendingStart.length) this.scheduler.start(pendingStart);
   }
 
-  private context(state: WorldEntity): BlueprintContext {
+  private context(
+    state: WorldEntity,
+    variables: Map<string, Value>,
+    blueprintId: string,
+    attachmentId: string,
+  ): BlueprintContext {
     const entity = state.entity;
     return {
       axis: (id) => this.input.axis(id),
-      variables: state.variables,
+      variables,
       move: (x, y) => {
         if (this.physics.request(entity.id, x * STEP, y * STEP)) return;
         this.set(entity, "x", entity.transform.x + x * STEP);
@@ -712,7 +829,8 @@ export class Game {
             },
       exists: (reference) =>
         typeof reference === "object" &&
-        ((reference.kind === "entity" && this.world.has(reference.id)) ||
+        ((reference.kind === "entity" &&
+          this.world.has(this.resolveReference(entity, reference.id))) ||
           (reference.kind === "asset" && this.assets.has(reference.id))),
       emit: (id, value) => this.scheduler.emit(id, value),
       animate: (clip) => {
@@ -737,10 +855,14 @@ export class Game {
         this.log({
           level: "info",
           entityId: entity.id,
+          ...(attachmentId !== primaryAttachmentId
+            ? { blueprintId, attachmentId }
+            : {}),
           blockId,
           message: displayValue(value),
         }),
-      fault: (diagnostic) => this.fault(entity.id, diagnostic),
+      fault: (diagnostic) =>
+        this.fault(entity.id, diagnostic, blueprintId, attachmentId),
     };
   }
 
@@ -768,10 +890,14 @@ export class Game {
       case "sound":
         if (!this.soundIds.has(command.soundId))
           throw new Error("The sound is missing from this project.");
-        if (this.audio.length === 128) this.audio.shift();
-        this.audio.push({ soundId: command.soundId, playing: command.playing });
+        this.queueAudio(command.soundId, command.playing);
         break;
     }
+  }
+
+  private queueAudio(soundId: string, playing: boolean, owner?: string) {
+    if (this.audio.length === 128) this.audio.shift();
+    this.audio.push(owner ? { soundId, playing, owner } : { soundId, playing });
   }
 
   consumeAudio(play: (command: AudioCommand) => void) {
@@ -816,9 +942,15 @@ export class Game {
     });
   }
 
+  private resolveReference(entity: Entity, id: string) {
+    return entity.prefab
+      ? (this.prefabMembers.get(entity.prefab.instanceId)?.get(id) ?? id)
+      : id;
+  }
+
   private target(entity: Entity, id?: string) {
     if (id === undefined) return entity;
-    const target = this.world.get(id);
+    const target = this.world.get(this.resolveReference(entity, id));
     if (!target)
       throw new Error("The target entity is absent from this scene.");
     return target.entity;
@@ -826,6 +958,8 @@ export class Game {
 
   private set(entity: Entity, property: Property, value: Value) {
     if (property === "visible") {
+      if (entity.tileLayers?.length && entity.visible !== Boolean(value))
+        this.tileVisibilityChanged = true;
       entity.visible = Boolean(value);
       return;
     }
@@ -848,18 +982,36 @@ export class Game {
     if (this.logs.length === 200) this.logs.shift();
     this.logs.push(entry);
   }
-  private fault(entityId: string, { blockId, message }: Diagnostic) {
+  private fault(
+    entityId: string,
+    { blockId, message }: Diagnostic,
+    blueprintId?: string,
+    attachmentId?: string,
+  ) {
     const key =
-      JSON.stringify(entityId) + "|" + JSON.stringify([blockId, message]);
+      JSON.stringify(entityId) +
+      "|" +
+      JSON.stringify([attachmentId, blueprintId, blockId, message]);
     if (this.reported.has(key)) return;
     this.reported.add(key);
-    this.log({ level: "error", entityId, blockId, message });
+    this.log({
+      level: "error",
+      entityId,
+      blockId,
+      message,
+      ...(attachmentId && attachmentId !== primaryAttachmentId
+        ? { blueprintId, attachmentId }
+        : {}),
+    });
   }
 
   start() {
     if (this.started) return;
     this.started = true;
     this.motion.start();
+    for (const { entity } of this.world.query("audio"))
+      if (entity.audio?.autoplay)
+        this.queueAudio(entity.audio.soundId, true, entity.id);
     this.scheduler.start(this.program);
   }
   private beginTick() {
@@ -870,6 +1022,10 @@ export class Game {
     if (this.scheduler.paused || !this.tickPending) return;
     this.tickPending = false;
     this.motion.step(STEP);
+    if (this.tileVisibilityChanged) {
+      this.navigation.invalidate();
+      this.tileVisibilityChanged = false;
+    }
     this.navigation.step(STEP, this.physics);
     this.physics.step(STEP, ({ entityId, otherId, phase }) => {
       const body = this.world.get(entityId)?.entity.body;
@@ -884,7 +1040,7 @@ export class Game {
         );
     });
     this.currentCamera = cameraView(
-      this.scene.camera,
+      this.cameraSettings(),
       this.cameraTarget(),
       this.project.width,
       this.project.height,
@@ -917,8 +1073,57 @@ export class Game {
   getEntity(id: string) {
     return this.world.get(id)?.entity;
   }
-  getVariables(id: string) {
-    return this.world.get(id)?.variables;
+  getVariables(id: string, attachmentId?: string) {
+    const bindings = this.bindingsByEntity.get(id);
+    return (
+      attachmentId
+        ? bindings?.find((binding) => binding.attachmentId === attachmentId)
+        : bindings?.[0]
+    )?.context.variables;
+  }
+  getEntityHandle(id: string) {
+    return this.world.handle(id);
+  }
+  resolveEntity(handle: EntityHandle) {
+    return this.world.resolve(handle)?.entity;
+  }
+  queryEntities(...components: ComponentName[]) {
+    return this.world.query(...components).map(({ entity }) => entity);
+  }
+
+  private componentRows(...keys: ComponentName[]) {
+    return [...this.world.query(...keys)]
+      .sort((a, b) => a.rank - b.rank)
+      .map(({ entity }) => entity);
+  }
+
+  private refreshComponents() {
+    this.lights = [...this.world.query("light")].sort(
+      (a, b) => a.rank - b.rank,
+    );
+    const previousCamera = this.componentCamera;
+    this.componentCamera = [...this.world.query("camera")]
+      .sort((a, b) => a.rank - b.rank)
+      .find(({ entity }) => entity.camera?.enabled)?.entity;
+    if (previousCamera !== this.componentCamera) this.currentCamera = undefined;
+    this.prefabMembers.clear();
+    this.tileOwners.clear();
+    for (const { entity } of this.entities) {
+      for (const id of entity.tileLayers ?? []) this.tileOwners.set(id, entity);
+      if (!entity.prefab) continue;
+      const { instanceId, sourceId } = entity.prefab;
+      const group =
+        this.prefabMembers.get(instanceId) ?? new Map<string, string>();
+      group.set(sourceId, entity.id);
+      this.prefabMembers.set(instanceId, group);
+    }
+  }
+
+  private createTiles(scene: Scene) {
+    return new TileWorld(
+      scene.tilemap,
+      (layer) => this.tileOwners.get(layer)?.visible ?? true,
+    );
   }
 
   private buildHierarchy() {
@@ -1030,15 +1235,26 @@ export class Game {
     return { ...state.pose.matrix };
   }
   private cameraTarget() {
-    return this.scene.camera.follow
-      ? this.worldPoint(this.scene.camera.follow)
-      : undefined;
+    const follow = this.componentCamera?.id ?? this.scene.camera.follow;
+    return follow ? this.worldPoint(follow) : undefined;
+  }
+
+  private cameraSettings(): Scene["camera"] {
+    if (!this.componentCamera?.camera) return this.scene.camera;
+    return {
+      x: this.componentCamera.transform.x,
+      y: this.componentCamera.transform.y,
+      follow: this.componentCamera.id,
+      offsetY: 0,
+      zoom: this.componentCamera.camera.zoom,
+      damping: this.componentCamera.camera.damping,
+    };
   }
   view() {
     return (
       this.currentCamera ??
       cameraView(
-        this.scene.camera,
+        this.cameraSettings(),
         this.cameraTarget(),
         this.project.width,
         this.project.height,
@@ -1165,7 +1381,11 @@ export class Game {
         if (!layer?.visible) continue;
         renderedLayer = layer.id;
         for (const { definition, grid } of this.tiles.layers) {
-          if (definition.visible && definition.layerId === layer.id)
+          if (
+            definition.visible &&
+            definition.layerId === layer.id &&
+            (this.tileOwners.get(definition.id)?.visible ?? true)
+          )
             paint(grid, definition.opacity);
         }
       }

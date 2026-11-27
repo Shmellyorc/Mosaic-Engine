@@ -3,12 +3,14 @@ import { create } from "zustand";
 import { exampleProject } from "@mosaic/example";
 import {
   parseProject,
+  attachmentBlueprints,
+  primaryAttachmentId,
   serializeProject,
   type Entity,
   type Project,
   type Scene,
 } from "@mosaic/model";
-import type { Blueprint, Value } from "@mosaic/blueprints";
+import { typeOf, type Blueprint, type Value } from "@mosaic/blueprints";
 import type { Preference } from "@mosaic/render";
 import type { BlueprintPause, RuntimeLog } from "@mosaic/runtime";
 import type { ProjectLocation } from "../../desktop/src/contracts";
@@ -76,6 +78,7 @@ type EditorState = {
   entityId: string | null;
   widgetId: string | null;
   blueprintId: string | null;
+  attachmentId: string | null;
   selectedAssetId: string | null;
   activeTileLayer: string | null;
   activeTerrain: string | null;
@@ -110,6 +113,7 @@ export const useEditor = create<EditorState>((set) => ({
   entityId: "player",
   widgetId: null,
   blueprintId: "movement",
+  attachmentId: primaryAttachmentId,
   selectedAssetId: null,
   activeTileLayer: null,
   activeTerrain: null,
@@ -184,8 +188,13 @@ export const useEditor = create<EditorState>((set) => ({
       entityId:
         next.scenes
           .find((scene) => scene.id === next.startSceneId)
-          ?.entities.find((entity) => entity.blueprintId)?.id ?? null,
+          ?.entities.find(
+            (entity) =>
+              entity.blueprintId ||
+              entity.attachments?.some(({ enabled }) => enabled),
+          )?.id ?? null,
       blueprintId: next.blueprints[0]?.id ?? null,
+      attachmentId: null,
       selectedAssetId: null,
       widgetId: null,
       activeTileLayer: null,
@@ -262,8 +271,30 @@ export function editBlueprint(recipe: (blueprint: Blueprint) => void) {
       (blueprint) => blueprint.id === id,
     );
     if (blueprint) {
+      const previous = new Map(
+        blueprint.variables
+          .filter(({ exposed }) => exposed)
+          .map(({ id, type }) => [id, type]),
+      );
       blueprint.version = 2;
       recipe(blueprint);
+      const valid = new Map(
+        blueprint.variables
+          .filter(({ exposed }) => exposed)
+          .map(({ id, type }) => [id, type]),
+      );
+      if (
+        valid.size === previous.size &&
+        [...valid].every(([key, type]) => previous.get(key) === type)
+      )
+        return;
+      for (const group of [...project.scenes, ...(project.prefabs ?? [])])
+        for (const entity of group.entities)
+          for (const attachment of entity.attachments ?? [])
+            if (attachment.blueprintId === id && attachment.overrides)
+              for (const [key, value] of Object.entries(attachment.overrides))
+                if (valid.get(key) !== typeOf(value))
+                  delete attachment.overrides[key];
     }
   });
 }
@@ -277,9 +308,13 @@ export function chooseScene(sceneId: string) {
   });
 }
 export function chooseEntity(entity: Entity | undefined) {
+  const blueprint = entity && attachmentBlueprints(entity)[0];
   useEditor.setState({
     entityId: entity?.id ?? null,
-    ...(entity?.blueprintId ? { blueprintId: entity.blueprintId } : {}),
+    ...(blueprint ? { blueprintId: blueprint } : {}),
+    attachmentId: entity?.blueprintId
+      ? primaryAttachmentId
+      : (entity?.attachments?.find(({ enabled }) => enabled)?.id ?? null),
   });
 }
 

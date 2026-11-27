@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   blueprintSchema,
+  blueprintValueSchema,
+  typeOf,
   extensionSchema,
   parseExtensionManifest,
   signalSchema,
@@ -18,6 +20,8 @@ import { catalogSchema, validateCatalog } from "./data";
 import { uiSchema, validateUi } from "./ui";
 export * from "./ui";
 export * from "./effects";
+export * from "./entity-components";
+export * from "./prefabs";
 export * from "./data";
 
 export { inspectWav } from "./wav";
@@ -128,6 +132,19 @@ const visual = z.discriminatedUnion("kind", [
     screen: z.boolean(),
   }),
 ]);
+const attachmentSchema = z.object({
+  id,
+  blueprintId: id,
+  enabled: z.boolean(),
+  overrides: z.record(id, blueprintValueSchema).optional(),
+});
+export type BlueprintAttachment = z.infer<typeof attachmentSchema>;
+const prefabLinkSchema = z.object({
+  assetId: id,
+  instanceId: id,
+  sourceId: id,
+});
+
 export const entitySchema = z.object({
   id,
   name,
@@ -147,6 +164,18 @@ export const entitySchema = z.object({
   }),
   visual: visual.nullable(),
   blueprintId: id.nullable(),
+  attachments: z.array(attachmentSchema).max(32).optional(),
+  prefab: prefabLinkSchema.optional(),
+  persistent: z.boolean().optional(),
+  camera: z
+    .object({
+      enabled: z.boolean(),
+      zoom: z.number().min(0.05).max(8),
+      damping: z.number().min(0).max(60).optional(),
+    })
+    .optional(),
+  tileLayers: z.array(id).max(32).optional(),
+  audio: z.object({ soundId: id, autoplay: z.boolean() }).optional(),
   body: bodySchema.optional(),
   navigation: agentSchema.optional(),
   light: lightSchema.optional(),
@@ -238,10 +267,17 @@ const sceneSchema = z.object({
     terrains: z.array(terrainSchema).max(128).optional(),
   }),
 });
+const prefabSchema = z.object({
+  id,
+  name,
+  entities: z.array(entitySchema).min(1).max(2000),
+});
+export type Prefab = z.infer<typeof prefabSchema>;
+
 const codes = z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,31}$/)).max(16);
 export const emptySignals: never[] = [];
 const projectSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   id,
   name,
   width: dimension,
@@ -250,6 +286,7 @@ const projectSchema = z.object({
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
+  prefabs: z.array(prefabSchema).max(512).optional(),
   extensions: z.array(extensionSchema).max(64).optional(),
   mixer: mixerSchema.optional(),
   data: catalogSchema.optional(),
@@ -264,6 +301,17 @@ export type Entity = z.infer<typeof entitySchema>;
 export type Asset = z.infer<typeof assetSchema>;
 export type Frame = z.infer<typeof frame>;
 export type Tile = z.infer<typeof tile>;
+/** Legacy single bindings have a stable instance key within their entity. */
+export const primaryAttachmentId = "primary";
+export function attachmentBlueprints(entity: Entity) {
+  return [
+    ...(entity.blueprintId ? [entity.blueprintId] : []),
+    ...(entity.attachments ?? [])
+      .filter(({ enabled }) => enabled)
+      .map(({ blueprintId }) => blueprintId),
+  ];
+}
+
 export const newId = () => globalThis.crypto.randomUUID();
 
 function idsOf(items: { id: string }[], label: string): Set<string> {
@@ -275,9 +323,9 @@ function idsOf(items: { id: string }[], label: string): Set<string> {
 export function validateProject(input: unknown): Project {
   if (!input || typeof input !== "object" || !("version" in input))
     throw new Error("Project has no format version.");
-  if (input.version !== 1)
+  if (input.version !== 1 && input.version !== 2)
     throw new Error(
-      `Unsupported Mosaic project format version. Expected version 1.`,
+      `Unsupported Mosaic project format version. Expected version 1 or 2.`,
     );
   let parsed: ReturnType<typeof projectSchema.safeParse>;
   try {
@@ -299,6 +347,76 @@ export function validateProject(input: unknown): Project {
   const sceneIds = idsOf(project.scenes, "scene");
   const assetIds = idsOf(project.assets, "asset");
   const blueprintIds = idsOf(project.blueprints, "blueprint");
+  const definitions = new Map(
+    project.blueprints.map((blueprint) => [blueprint.id, blueprint]),
+  );
+  idsOf(project.prefabs ?? [], "prefab");
+  const prefabSources = new Map(
+    project.prefabs?.map(({ id, entities }) => [
+      id,
+      new Set(entities.map((entity) => entity.id)),
+    ]),
+  );
+  const soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
+  function validateAttachments(entity: Entity, entityIds: Set<string>) {
+    const attachments = entity.attachments;
+    if (!attachments?.length) return;
+    idsOf(attachments, "Blueprint attachment");
+    for (const attachment of attachments) {
+      if (attachment.id === primaryAttachmentId)
+        throw Error("A Blueprint attachment uses a reserved ID.");
+      const definition = definitions.get(attachment.blueprintId);
+      if (!definition)
+        throw Error(`"${entity.name}" references a missing Blueprint.`);
+      for (const [key, value] of Object.entries(attachment.overrides ?? {})) {
+        const variable = definition.variables.find(
+          (v) => v.id === key && v.exposed,
+        );
+        if (!variable || typeOf(value) !== variable.type)
+          throw Error(
+            `"${entity.name}" has an invalid exposed Blueprint override.`,
+          );
+        if (
+          typeof value === "object" &&
+          ((value.kind === "entity" && value.id && !entityIds.has(value.id)) ||
+            (value.kind === "asset" && value.id && !assetIds.has(value.id)))
+        )
+          throw Error(`"${entity.name}" has a missing override reference.`);
+      }
+    }
+  }
+  for (const prefab of project.prefabs ?? []) {
+    const ids = idsOf(prefab.entities, "prefab entity");
+    if (prefab.entities.filter(({ parentId }) => !parentId).length !== 1)
+      throw Error(`Prefab "${prefab.name}" requires one root.`);
+    const parents = new Map(
+      prefab.entities.map((entity) => [entity.id, entity.parentId]),
+    );
+    for (const entity of prefab.entities) {
+      const seen = new Set<string>();
+      let at: string | null = entity.id;
+      while (at) {
+        if (seen.has(at) || !parents.has(at))
+          throw Error(`Prefab "${prefab.name}" has an invalid hierarchy.`);
+        seen.add(at);
+        at = parents.get(at)!;
+      }
+      if (
+        entity.prefab ||
+        entity.tileLayers?.length ||
+        (entity.parentId && (entity.body || entity.navigation)) ||
+        (entity.navigation?.target && !ids.has(entity.navigation.target)) ||
+        (entity.visual?.kind === "sprite" &&
+          !assetIds.has(entity.visual.assetId)) ||
+        (entity.blueprintId && !definitions.has(entity.blueprintId)) ||
+        (entity.audio && !soundIds.has(entity.audio.soundId))
+      )
+        throw Error(
+          `Prefab "${prefab.name}" contains an invalid component reference.`,
+        );
+      validateAttachments(entity, ids);
+    }
+  }
   idsOf(project.input, "input");
   idsOf(project.extensions ?? [], "extension");
   for (const extension of project.extensions ?? [])
@@ -359,7 +477,38 @@ export function validateProject(input: unknown): Project {
         }
       }
     }
+    const prefabMembers = new Map<
+      string,
+      { asset: string; sources: Set<string> }
+    >();
+    const availableTileLayers = new Set(
+      scene.tilemap.layers?.map(({ id }) => id),
+    );
+    const ownedTiles = new Set<string>();
     for (const entity of scene.entities) {
+      validateAttachments(entity, entityIds);
+      if (entity.audio && !soundIds.has(entity.audio.soundId))
+        throw Error(`"${entity.name}" has a missing audio source.`);
+      for (const layer of entity.tileLayers ?? []) {
+        if (!availableTileLayers.has(layer) || ownedTiles.has(layer))
+          throw Error(`"${entity.name}" has a missing or shared tile layer.`);
+        ownedTiles.add(layer);
+      }
+      const link = entity.prefab;
+      if (link) {
+        const group = prefabMembers.get(link.instanceId) ?? {
+          asset: link.assetId,
+          sources: new Set<string>(),
+        };
+        if (
+          group.asset !== link.assetId ||
+          group.sources.has(link.sourceId) ||
+          !prefabSources.get(link.assetId)?.has(link.sourceId)
+        )
+          throw Error(`"${entity.name}" has an invalid prefab instance link.`);
+        group.sources.add(link.sourceId);
+        prefabMembers.set(link.instanceId, group);
+      }
       if ((entity.body || entity.navigation) && entity.parentId)
         throw new Error(
           `"${entity.name}" must be a root entity to use physics or navigation.`,
@@ -488,7 +637,33 @@ export function parseProject(source: string): Project {
   return validateProject(value);
 }
 export function serializeProject(project: Project): string {
-  const source = JSON.stringify(validateProject(project), null, 2);
+  const modern =
+    project.version === 2 ||
+    !!project.prefabs?.length ||
+    project.scenes.some(({ entities }) =>
+      entities.some(
+        (entity) =>
+          !!(
+            entity.attachments?.length ||
+            entity.prefab ||
+            entity.persistent ||
+            entity.camera ||
+            entity.tileLayers?.length ||
+            entity.audio
+          ),
+      ),
+    ) ||
+    project.blueprints.some(
+      ({ requires, variables }) =>
+        !!requires?.length || variables.some(({ exposed }) => exposed),
+    );
+  const source = JSON.stringify(
+    validateProject(
+      modern && project.version === 1 ? { ...project, version: 2 } : project,
+    ),
+    null,
+    2,
+  );
   if (new TextEncoder().encode(source).byteLength > MAX_PROJECT_BYTES)
     throw new Error("Project exceeds the 64 MiB format limit.");
   return source;

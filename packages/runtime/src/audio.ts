@@ -1,10 +1,19 @@
 import { inspectWav, MASTER_BUS, type Mixer, type Sound } from "@mosaic/model";
 
-export type AudioCommand = { soundId: string; playing: boolean };
+export type AudioCommand = {
+  soundId: string;
+  playing: boolean;
+  owner?: string;
+};
 const MAX_VOICES = 32;
 const MAX_BUFFER_BYTES = 48 * 1024 * 1024;
 
-type Voice = { id: string; source: AudioBufferSourceNode; gain: GainNode };
+type Voice = {
+  id: string;
+  owner?: string;
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+};
 type CachedSound = { source: string; buffer: AudioBuffer; bytes: number };
 const unit = (value: number, muted: boolean) => (muted ? 0 : value);
 
@@ -153,10 +162,14 @@ export class AudioMixer {
     for (const voice of this.voices) this.stop(voice);
   }
 
-  dispatch({ soundId, playing }: AudioCommand, preview = false) {
+  dispatch({ soundId, playing, owner }: AudioCommand, preview = false) {
     if (!playing) {
       for (const voice of this.voices)
-        if (voice.id === soundId) this.stop(voice);
+        if (
+          voice.id === soundId &&
+          (owner === undefined || voice.owner === owner)
+        )
+          this.stop(voice);
       return;
     }
     const sound = this.sounds.get(soundId);
@@ -166,7 +179,8 @@ export class AudioMixer {
     if (
       loop &&
       [...this.voices].some(
-        (voice) => voice.id === soundId && voice.source.loop,
+        (voice) =>
+          voice.id === soundId && voice.owner === owner && voice.source.loop,
       )
     )
       return;
@@ -184,7 +198,7 @@ export class AudioMixer {
       gain.gain.value = sound.gain;
       source.connect(gain);
       gain.connect(this.buses.get(sound.bus) ?? this.master!);
-      const voice = { id: sound.id, source, gain };
+      const voice = { id: sound.id, owner, source, gain };
       source.onended = () => this.clean(voice);
       this.voices.add(voice);
       source.start();

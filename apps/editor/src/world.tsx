@@ -363,6 +363,10 @@ function TilemapControls({ scene }: { scene: Scene }) {
               className="danger"
               onClick={() =>
                 editScene((draft) => {
+                  for (const entity of draft.entities)
+                    entity.tileLayers = entity.tileLayers?.filter(
+                      (id) => id !== layer.id,
+                    );
                   draft.tilemap.layers = draft.tilemap.layers?.filter(
                     (item) => item.id !== layer.id,
                   );
@@ -538,7 +542,15 @@ function SelectEntity({ scene, entity }: { scene: Scene; entity?: Entity }) {
   );
 }
 
-function PhysicsControls({ scene, entity }: { scene: Scene; entity?: Entity }) {
+export function PhysicsControls({
+  scene,
+  entity,
+  embedded,
+}: {
+  scene: Scene;
+  entity?: Entity;
+  embedded?: boolean;
+}) {
   const signals = useEditor((state) => state.project.signals);
   const gravity = scene.gravity ?? { x: 0, y: 0 };
   const body = entity?.body;
@@ -554,24 +566,26 @@ function PhysicsControls({ scene, entity }: { scene: Scene; entity?: Entity }) {
   ] as const;
   return (
     <>
-      <Section title="Scene Gravity">
-        {(["x", "y"] as const).map((axis) => (
-          <Numeric
-            key={axis}
-            label={"Gravity " + axis.toUpperCase()}
-            value={gravity[axis]}
-            min={-10000}
-            max={10000}
-            change={(value) =>
-              editScene((draft) => {
-                (draft.gravity ??= { x: 0, y: 0 })[axis] = value;
-              })
-            }
-          />
-        ))}
-      </Section>
+      {!embedded && (
+        <Section title="Scene Gravity">
+          {(["x", "y"] as const).map((axis) => (
+            <Numeric
+              key={axis}
+              label={"Gravity " + axis.toUpperCase()}
+              value={gravity[axis]}
+              min={-10000}
+              max={10000}
+              change={(value) =>
+                editScene((draft) => {
+                  (draft.gravity ??= { x: 0, y: 0 })[axis] = value;
+                })
+              }
+            />
+          ))}
+        </Section>
+      )}
       <Section title="Body">
-        <SelectEntity scene={scene} entity={entity} />
+        {!embedded && <SelectEntity scene={scene} entity={entity} />}
         {entity?.parentId && (
           <small>Physics bodies belong to root entities.</small>
         )}
@@ -749,18 +763,20 @@ function CameraControls({ scene }: { scene: Scene }) {
   );
 }
 
-function NavigationControls({
+export function NavigationControls({
   scene,
   entity,
+  embedded,
 }: {
   scene: Scene;
   entity?: Entity;
+  embedded?: boolean;
 }) {
   const agent = entity?.navigation;
   const invalid = !!entity?.parentId || entity?.body?.kind === "static";
   return (
     <Section title="Pathfinding Agent">
-      <SelectEntity scene={scene} entity={entity} />
+      {!embedded && <SelectEntity scene={scene} entity={entity} />}
       {invalid && <small>Use a non-static root entity.</small>}
       {entity && !agent && (
         <button
@@ -845,39 +861,43 @@ function NavigationControls({
   );
 }
 
-function LightingControls({
+export function LightingControls({
   scene,
   entity,
+  embedded,
 }: {
   scene: Scene;
   entity?: Entity;
+  embedded?: boolean;
 }) {
   const lighting = scene.lighting ?? { ambient: "#53596d", enabled: false };
   const light = entity?.light;
   return (
     <>
-      <Section title="Environment">
-        <Flag
-          label="Enable scene lighting"
-          value={lighting.enabled}
-          change={(value) =>
-            editScene((draft) => {
-              (draft.lighting ??= lighting).enabled = value;
-            })
-          }
-        />
-        <Color
-          label="Ambient light"
-          value={lighting.ambient}
-          change={(value) =>
-            editScene((draft) => {
-              (draft.lighting ??= lighting).ambient = value;
-            })
-          }
-        />
-      </Section>
+      {!embedded && (
+        <Section title="Environment">
+          <Flag
+            label="Enable scene lighting"
+            value={lighting.enabled}
+            change={(value) =>
+              editScene((draft) => {
+                (draft.lighting ??= lighting).enabled = value;
+              })
+            }
+          />
+          <Color
+            label="Ambient light"
+            value={lighting.ambient}
+            change={(value) =>
+              editScene((draft) => {
+                (draft.lighting ??= lighting).ambient = value;
+              })
+            }
+          />
+        </Section>
+      )}
       <Section title="Point Light">
-        <SelectEntity scene={scene} entity={entity} />
+        {!embedded && <SelectEntity scene={scene} entity={entity} />}
         {entity && !light && (
           <button
             disabled={scene.entities.filter((item) => item.light).length >= 128}
