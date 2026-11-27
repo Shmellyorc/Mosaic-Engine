@@ -1,4 +1,4 @@
-import { Game } from "@mosaic/runtime";
+import { AudioMixer, Game } from "@mosaic/runtime";
 import { emptySignals, type Project } from "@mosaic/model";
 import { selectedScene, useEditor } from "./state";
 
@@ -70,7 +70,24 @@ export function startTransport() {
   let debugAt = 0;
   let previousEntity: string | null = null;
   let document: Project | undefined;
+  const audio = new AudioMixer((message) =>
+    useEditor.getState().report(message, "error"),
+  );
   useEditor.subscribe((state, previous) => {
+    if (
+      state.runId !== previous.runId ||
+      (state.transport === "editing" && previous.transport !== "editing")
+    )
+      audio.stopAll();
+    if (
+      state.transport === "playing" &&
+      (state.runId !== previous.runId || previous.transport !== "playing")
+    ) {
+      audio.configure(state.project.mixer);
+      void audio.unlock();
+    }
+    if (state.transport !== "playing" && previous.transport === "playing")
+      audio.pause();
     if (!game || state.runId !== runId) return;
     if (state.breakpoints !== previous.breakpoints)
       updateBreakpoints(game, state.breakpoints);
@@ -108,6 +125,11 @@ export function startTransport() {
         if (state.transport === "playing") game.advance((now - last) / 1000);
       }
       showPause(game);
+      if (
+        useEditor.getState().transport === "playing" &&
+        state.project.mixer?.sounds.length
+      )
+        game.consumeAudio((command) => audio.dispatch(command));
       if (now >= debugAt || state.entityId !== previousEntity) {
         debugAt = now + 120;
         previousEntity = state.entityId;
@@ -124,5 +146,8 @@ export function startTransport() {
     last = now;
     requestAnimationFrame(tick);
   }
+  window.addEventListener("pagehide", (event) => {
+    if (!event.persisted) audio.dispose();
+  });
   requestAnimationFrame(tick);
 }

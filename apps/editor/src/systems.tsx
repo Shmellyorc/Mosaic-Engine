@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Film, Gamepad2, Pause, Play, Plus, Trash2 } from "lucide-react";
-import { newId, type Frame } from "@mosaic/model";
+import { newId } from "@mosaic/model";
+import { AnimatorMachine, deleteAnimationClip, FrameImage } from "./animator";
 import { Field, NumberField, TextField } from "./controls";
 import { editEntity, selectedEntity, useEditor } from "./state";
 
@@ -144,33 +145,6 @@ export function InputWorkspace() {
   );
 }
 
-function FrameImage({ frame, source }: { frame: Frame; source: string }) {
-  const scale = Math.min(3, 180 / Math.max(frame.w, frame.h));
-  return (
-    <div
-      role="img"
-      aria-label="Current spritesheet frame"
-      style={{
-        width: frame.w * scale,
-        height: frame.h * scale,
-        overflow: "hidden",
-        position: "relative",
-      }}
-    >
-      <img
-        src={source}
-        alt=""
-        style={{
-          position: "absolute",
-          maxWidth: "none",
-          imageRendering: "pixelated",
-          transformOrigin: "top left",
-          transform: `translate(${-frame.x * scale}px,${-frame.y * scale}px) scale(${scale})`,
-        }}
-      />
-    </div>
-  );
-}
 export function AnimatorWorkspace() {
   const entity = useEditor(selectedEntity);
   const source = useEditor((state) => {
@@ -179,6 +153,7 @@ export function AnimatorWorkspace() {
     return state.project.assets.find((asset) => asset.id === visual.assetId)
       ?.source;
   });
+  const [tab, setTab] = useState<"clips" | "states">("clips");
   const [clipId, setClipId] = useState("");
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -228,9 +203,31 @@ export function AnimatorWorkspace() {
         <Film size={17} />
         <strong>{entity ? `${entity.name} / Animator` : "Animator"}</strong>
         {source && (
-          <button className="push" onClick={add}>
-            <Plus size={15} /> Clip
-          </button>
+          <div className="push effect-row effect-tabs">
+            <button
+              aria-pressed={tab === "clips"}
+              onClick={() => setTab("clips")}
+            >
+              Clips
+            </button>
+            <button
+              aria-pressed={tab === "states"}
+              onClick={() => {
+                setPlaying(false);
+                setTab("states");
+              }}
+            >
+              State Machine
+            </button>
+            {tab === "clips" && (
+              <button
+                onClick={add}
+                disabled={(entity?.clips.length ?? 0) >= 50}
+              >
+                <Plus size={15} /> Clip
+              </button>
+            )}
+          </div>
         )}
       </div>
       {!source ? (
@@ -239,6 +236,8 @@ export function AnimatorWorkspace() {
           <h2>Spritesheet Animation</h2>
           <p>Select an entity with a sprite to add or edit clips.</p>
         </div>
+      ) : tab === "states" && entity ? (
+        <AnimatorMachine key={entity.id} entity={entity} source={source} />
       ) : (
         <div className="system-body">
           <div className="clip-tabs">
@@ -340,11 +339,7 @@ export function AnimatorWorkspace() {
                 <button
                   className="danger"
                   onClick={() =>
-                    editEntity((draft) => {
-                      draft.clips = draft.clips.filter(
-                        (item) => item.id !== clip.id,
-                      );
-                    })
+                    editEntity((draft) => deleteAnimationClip(draft, clip.id))
                   }
                 >
                   <Trash2 size={14} /> Delete clip

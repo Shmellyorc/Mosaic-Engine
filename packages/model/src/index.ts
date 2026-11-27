@@ -1,6 +1,18 @@
 import { z } from "zod";
 import { blueprintSchema, signalSchema } from "@mosaic/blueprints";
 
+import {
+  animatorSchema,
+  emitterSchema,
+  MAX_EMITTERS,
+  mixerSchema,
+  MASTER_BUS,
+  timelineSchema,
+} from "./effects";
+export * from "./effects";
+
+export { inspectWav } from "./wav";
+
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_PROJECT_BYTES = 64 * 1024 * 1024;
 const id = z.string().min(1).max(100);
@@ -129,6 +141,8 @@ export const entitySchema = z.object({
   body: bodySchema.optional(),
   navigation: agentSchema.optional(),
   light: lightSchema.optional(),
+  animator: animatorSchema.optional(),
+  particles: emitterSchema.optional(),
   clips: z
     .array(
       z.object({
@@ -202,6 +216,7 @@ const sceneSchema = z.object({
     .min(1)
     .max(128),
   entities: z.array(entitySchema).max(20000),
+  timelines: z.array(timelineSchema).max(64).optional(),
   gravity: z.object({ x: rate, y: rate }).optional(),
   lighting: z.object({ ambient: color, enabled: z.boolean() }).optional(),
   tilemap: z.object({
@@ -225,6 +240,7 @@ const projectSchema = z.object({
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
+  mixer: mixerSchema.optional(),
   signals: z.array(signalSchema).max(256).optional(),
   input: z
     .array(z.object({ id, name, negative: codes, positive: codes }))
@@ -276,6 +292,16 @@ export function validateProject(input: unknown): Project {
   const signals = new Map(
     (project.signals ?? []).map((signal) => [signal.id, signal.type]),
   );
+  if (project.mixer) {
+    const buses = idsOf(project.mixer.buses, "audio bus");
+    idsOf(project.mixer.sounds, "sound");
+    if (buses.has(MASTER_BUS))
+      throw new Error("The master audio bus ID is reserved.");
+    for (const sound of project.mixer.sounds) {
+      if (sound.bus !== MASTER_BUS && !buses.has(sound.bus))
+        throw new Error(`Sound "${sound.name}" has a missing audio bus.`);
+    }
+  }
   if (!sceneIds.has(project.startSceneId))
     throw new Error("The starting scene is missing.");
   for (const scene of project.scenes) {
@@ -289,6 +315,33 @@ export function validateProject(input: unknown): Project {
       throw new Error(`"${scene.name}" camera target is missing.`);
     if (scene.entities.filter((entity) => entity.light).length > 128)
       throw new Error(`"${scene.name}" exceeds the 128 light limit.`);
+    if (
+      scene.entities.filter((entity) => entity.particles).length > MAX_EMITTERS
+    )
+      throw new Error(
+        `"${scene.name}" exceeds the ${MAX_EMITTERS} emitter limit.`,
+      );
+    idsOf(scene.timelines ?? [], "timeline");
+    for (const timeline of scene.timelines ?? []) {
+      idsOf(timeline.tracks, "timeline track");
+      const targets = new Set<string>();
+      for (const track of timeline.tracks) {
+        const binding = JSON.stringify([track.entityId, track.property]);
+        if (!entityIds.has(track.entityId) || targets.has(binding))
+          throw new Error(
+            `Timeline "${timeline.name}" has an invalid or duplicate track binding.`,
+          );
+        targets.add(binding);
+        let previous = -1;
+        for (const key of track.keys) {
+          if (key.time <= previous || key.time > timeline.duration)
+            throw new Error(
+              `Timeline "${timeline.name}" requires unique, ordered keys within its duration.`,
+            );
+          previous = key.time;
+        }
+      }
+    }
     for (const entity of scene.entities) {
       if ((entity.body || entity.navigation) && entity.parentId)
         throw new Error(
@@ -318,7 +371,33 @@ export function validateProject(input: unknown): Project {
         !assetIds.has(entity.visual.assetId)
       )
         throw new Error(`"${entity.name}" references a missing image.`);
-      idsOf(entity.clips, "clip");
+      const clips = idsOf(entity.clips, "clip");
+      const animator = entity.animator;
+      if (animator) {
+        const states = idsOf(animator.states, "animation state");
+        const parameters = idsOf(animator.parameters, "animation parameter");
+        idsOf(animator.transitions, "animation transition");
+        if (
+          entity.visual?.kind !== "sprite" ||
+          !states.has(animator.entry) ||
+          animator.states.some((state) => !clips.has(state.clipId))
+        )
+          throw new Error(
+            `"${entity.name}" animator requires a sprite, an entry state, and assigned clips.`,
+          );
+        for (const { from, to, condition } of animator.transitions) {
+          if (
+            (from !== null && !states.has(from)) ||
+            !states.has(to) ||
+            from === to ||
+            (condition.kind === "parameter" &&
+              !parameters.has(condition.parameterId))
+          )
+            throw new Error(
+              `"${entity.name}" has an invalid animation transition.`,
+            );
+        }
+      }
       if (
         new Set(entity.clips.map((clip) => clip.name)).size !==
         entity.clips.length

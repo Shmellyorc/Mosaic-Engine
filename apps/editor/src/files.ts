@@ -2,13 +2,17 @@ import { compileBlueprint } from "@mosaic/blueprints";
 import {
   MAX_IMAGE_BYTES,
   MAX_PROJECT_BYTES,
+  MAX_SOUND_BYTES,
+  MASTER_BUS,
+  createMixer,
+  inspectWav,
   newId,
   parseProject,
   serializeProject,
   type Project,
 } from "@mosaic/model";
 import { gameHtml } from "../../game/src/html";
-import type { ImportedImage } from "../../desktop/src/contracts";
+import type { ImportedAsset } from "../../desktop/src/contracts";
 import { useEditor } from "./state";
 
 type PickerType = { description: string; accept: Record<string, string[]> };
@@ -156,7 +160,7 @@ export async function saveProject(as = false) {
   return true;
 }
 export async function importImage() {
-  let selected: ImportedImage | null;
+  let selected: ImportedAsset | null;
   if (window.mosaic) selected = await window.mosaic.importImage();
   else {
     const result = await openFile(images, ".png,.jpg,.jpeg,.gif,.webp");
@@ -189,6 +193,46 @@ export async function importImage() {
     project.assets.push(asset);
   });
   return true;
+}
+export async function importSound() {
+  const initial = useEditor.getState().project;
+  let selected: ImportedAsset | null;
+  if (window.mosaic) selected = await window.mosaic.importSound();
+  else {
+    const result = await openFile(
+      { description: "WAV audio", accept: { "audio/wav": [".wav"] } },
+      ".wav",
+    );
+    if (!result) return;
+    const { file } = result;
+    if (file.size > MAX_SOUND_BYTES)
+      throw new Error("Sound exceeds the 8 MiB asset limit.");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    inspectWav(bytes);
+    let binary = "";
+    for (let start = 0; start < bytes.length; start += 0x2000)
+      binary += String.fromCharCode(...bytes.subarray(start, start + 0x2000));
+    selected = {
+      name: file.name.slice(0, 100),
+      source: "data:audio/wav;base64," + btoa(binary),
+    };
+  }
+  if (!selected) return;
+  const state = useEditor.getState();
+  if (initial.id !== state.project.id) return;
+  if ((state.project.mixer?.sounds.length ?? 0) >= 128)
+    throw new Error("This project already has 128 sounds.");
+  const sound = {
+    ...selected,
+    id: newId(),
+    bus: MASTER_BUS,
+    gain: 1,
+    loop: false,
+  };
+  state.edit((project) => {
+    (project.mixer ??= createMixer()).sounds.push(sound);
+  });
+  return sound.id;
 }
 export async function exportGame() {
   const project = useEditor.getState().project;

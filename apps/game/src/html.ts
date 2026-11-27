@@ -21,7 +21,7 @@ button,select{background:#29243d;color:#f1ebfc;border:1px solid #514467;border-r
 </head>
 <body>
 <main id="game" aria-label="Game" tabindex="0"></main>
-<footer><strong id="game-title"></strong><label>Renderer <select id="backend"><option value="auto">Auto</option><option value="canvas">Canvas 2D</option><option value="pixi">PixiJS</option></select></label><span id="runtime-status" role="status"></span><span id="runtime-error" role="alert"></span></footer>
+<footer><strong id="game-title"></strong><label>Renderer <select id="backend"><option value="auto">Auto</option><option value="canvas">Canvas 2D</option><option value="pixi">PixiJS</option></select></label><button type="button" id="enable-audio" hidden>Enable audio</button><span id="runtime-status" role="status"></span><span id="runtime-error" role="alert"></span></footer>
 <script id="mosaic-project" type="application/json">${data}</script>
 <script>${script}</script>
 </body>

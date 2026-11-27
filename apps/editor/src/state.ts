@@ -22,6 +22,9 @@ export const workspaces = [
   "Navigation",
   "Lighting",
   "Animator",
+  "Timeline",
+  "Particles",
+  "Audio",
   "UI",
   "Input",
 ] as const;

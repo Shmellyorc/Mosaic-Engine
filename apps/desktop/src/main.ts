@@ -14,6 +14,8 @@ import { randomUUID } from "node:crypto";
 import {
   MAX_IMAGE_BYTES,
   MAX_PROJECT_BYTES,
+  MAX_SOUND_BYTES,
+  inspectWav,
   parseProject,
   serializeProject,
 } from "@mosaic/model";
@@ -170,6 +172,21 @@ secured(channels.image, async (parent) => {
   return {
     name: basename(file).slice(0, 100),
     source: `data:image/${kind};base64,${data.toString("base64")}`,
+  };
+});
+secured(channels.sound, async (parent) => {
+  const result = await dialog.showOpenDialog(parent, {
+    title: "Import WAV Sound",
+    properties: ["openFile"],
+    filters: [{ name: "WAV audio", extensions: ["wav"] }],
+  });
+  if (result.canceled) return null;
+  const file = await realpath(result.filePaths[0]);
+  const data = await readBounded(file, MAX_SOUND_BYTES);
+  inspectWav(data);
+  return {
+    name: basename(file).slice(0, 100),
+    source: "data:audio/wav;base64," + data.toString("base64"),
   };
 });
 secured(channels.export, async (parent, source, filename) => {

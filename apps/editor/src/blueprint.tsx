@@ -18,6 +18,8 @@ import {
   Repeat2,
   Radio,
   ArrowUpRight,
+  AudioLines,
+  Sparkles,
 } from "lucide-react";
 import {
   useEffect,
@@ -42,6 +44,9 @@ import {
   defaultValue,
   literal,
   propertyTypes,
+  easingSchema,
+  motionPropertySchema,
+  type EffectCommand,
   type Binary,
   type Block,
   type Blueprint,
@@ -59,6 +64,7 @@ import {
   editBlueprint,
   selectedBlueprint,
   selectedEntity,
+  selectedScene,
   useEditor,
 } from "./state";
 import { Field, Section, TextField } from "./controls";
@@ -143,6 +149,36 @@ const kinds = {
     description: "Play a spritesheet clip on this entity.",
     tone: "purple",
     Icon: Film,
+  },
+  animationParameter: {
+    name: "Set Animation Parameter",
+    description: "Set a numeric Animator parameter on this entity.",
+    tone: "purple",
+    Icon: Film,
+  },
+  timeline: {
+    name: "Control Timeline",
+    description: "Play or stop a timeline in this scene.",
+    tone: "purple",
+    Icon: Clock3,
+  },
+  tween: {
+    name: "Tween Property",
+    description: "Animate a numeric transform property over simulation time.",
+    tone: "green",
+    Icon: Move,
+  },
+  particles: {
+    name: "Control Particles",
+    description: "Burst, start, or stop this entity’s emitter.",
+    tone: "green",
+    Icon: Sparkles,
+  },
+  sound: {
+    name: "Control Sound",
+    description: "Play or stop an imported sound through its mixer bus.",
+    tone: "purple",
+    Icon: AudioLines,
   },
   property: {
     name: "Set Property",
@@ -346,6 +382,23 @@ function makeBlock(
       return { id, kind, x: literal(0), y: literal(0) };
     case "animate":
       return { id, kind, clip: clip ?? "" };
+    case "animationParameter":
+      return { id, kind, parameterId: "unassigned", value: literal(0) };
+    case "timeline":
+      return { id, kind, timelineId: "unassigned", playing: true };
+    case "tween":
+      return {
+        id,
+        kind,
+        property: "alpha",
+        value: literal(1),
+        seconds: literal(0.5),
+        ease: "linear",
+      };
+    case "particles":
+      return { id, kind, operation: "burst" };
+    case "sound":
+      return { id, kind, soundId: "unassigned", playing: true };
     case "property":
       return { id, kind, property: "visible", value: literal(true) };
     case "log":
@@ -1461,6 +1514,168 @@ type RenderExpression = (
   change: (expr: Expression) => void,
   expected?: ValueType,
 ) => ReactNode;
+type EffectBlock = Extract<Block, { kind: EffectCommand["kind"] }>;
+
+function EffectChoice({
+  label,
+  value,
+  options,
+  change,
+}: {
+  label: string;
+  value: string;
+  options: readonly { id: string; name: string }[];
+  change: (value: string) => void;
+}) {
+  return (
+    <Field label={label}>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => change(event.target.value)}
+      >
+        {!options.some((item) => item.id === value) && (
+          <option value={value} disabled>
+            {value === "unassigned" ? "Choose…" : "Unavailable (" + value + ")"}
+          </option>
+        )}
+        {options.map(({ id, name }) => (
+          <option key={id} value={id}>
+            {name}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+function EffectFields({
+  block,
+  expression,
+  replace,
+}: {
+  block: EffectBlock;
+  expression: RenderExpression;
+  replace: (block: Block) => void;
+}) {
+  const entity = useEditor(selectedEntity);
+  const timelines = useEditor((state) => selectedScene(state).timelines);
+  const sounds = useEditor((state) => state.project.mixer?.sounds);
+  const transport = [
+    { id: "play", name: "Play" },
+    { id: "stop", name: "Stop" },
+  ];
+  switch (block.kind) {
+    case "animationParameter":
+      return (
+        <>
+          <EffectChoice
+            label="Animation parameter"
+            value={block.parameterId}
+            options={entity?.animator?.parameters ?? []}
+            change={(parameterId) => replace({ ...block, parameterId })}
+          />
+          <Field label="Value">
+            {expression(
+              "Animation parameter value",
+              block.value,
+              (value) => replace({ ...block, value }),
+              "number",
+            )}
+          </Field>
+        </>
+      );
+    case "timeline":
+    case "sound":
+      return (
+        <>
+          {block.kind === "timeline" ? (
+            <EffectChoice
+              label="Timeline"
+              value={block.timelineId}
+              options={timelines ?? []}
+              change={(timelineId) => replace({ ...block, timelineId })}
+            />
+          ) : (
+            <EffectChoice
+              label="Sound"
+              value={block.soundId}
+              options={sounds ?? []}
+              change={(soundId) => replace({ ...block, soundId })}
+            />
+          )}
+          <EffectChoice
+            label="Playback"
+            value={block.playing ? "play" : "stop"}
+            options={transport}
+            change={(value) => replace({ ...block, playing: value === "play" })}
+          />
+        </>
+      );
+    case "particles":
+      return (
+        <EffectChoice
+          label="Emitter action"
+          value={block.operation}
+          options={[
+            { id: "burst", name: "Burst" },
+            { id: "start", name: "Start emission" },
+            { id: "stop", name: "Stop emission" },
+          ]}
+          change={(operation) =>
+            replace({
+              ...block,
+              operation: operation as typeof block.operation,
+            })
+          }
+        />
+      );
+    case "tween":
+      return (
+        <>
+          <EffectChoice
+            label="Tween property"
+            value={block.property}
+            options={motionPropertySchema.options.map((id) => ({
+              id,
+              name: id,
+            }))}
+            change={(property) =>
+              replace({
+                ...block,
+                property: motionPropertySchema.parse(property),
+              })
+            }
+          />
+          <Field label="To">
+            {expression(
+              "Tween destination",
+              block.value,
+              (value) => replace({ ...block, value }),
+              "number",
+            )}
+          </Field>
+          <Field label="Seconds">
+            {expression(
+              "Tween duration",
+              block.seconds,
+              (seconds) => replace({ ...block, seconds }),
+              "number",
+            )}
+          </Field>
+          <EffectChoice
+            label="Tween easing"
+            value={block.ease}
+            options={easingSchema.options.map((id) => ({ id, name: id }))}
+            change={(ease) =>
+              replace({ ...block, ease: easingSchema.parse(ease) })
+            }
+          />
+        </>
+      );
+  }
+}
+
 function AdvancedFields({
   block,
   blueprint,
@@ -1479,6 +1694,14 @@ function AdvancedFields({
   replace: (block: Block) => void;
 }) {
   switch (block.kind) {
+    case "animationParameter":
+    case "timeline":
+    case "tween":
+    case "particles":
+    case "sound":
+      return (
+        <EffectFields block={block} expression={expression} replace={replace} />
+      );
     case "let":
       return (
         <>

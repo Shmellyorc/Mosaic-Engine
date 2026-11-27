@@ -1,6 +1,6 @@
 import { parseProject } from "@mosaic/model";
 import { createRenderer, type Preference, type Renderer } from "@mosaic/render";
-import { connectKeyboard, Game } from "@mosaic/runtime";
+import { AudioMixer, connectKeyboard, Game } from "@mosaic/runtime";
 
 const parent = document.querySelector<HTMLElement>("#game")!;
 const control = document.querySelector<HTMLSelectElement>("#backend")!;
@@ -17,6 +17,19 @@ async function boot() {
   document.title = project.name;
   document.querySelector("#game-title")!.textContent = project.name;
   const game = new Game(project);
+  const audio = new AudioMixer(report);
+  const audioButton =
+    document.querySelector<HTMLButtonElement>("#enable-audio")!;
+  audio.configure(project.mixer);
+  let audioReady = false;
+  if (project.mixer?.sounds.length) {
+    audioButton.hidden = false;
+    audioButton.addEventListener("click", async () => {
+      audioReady = await audio.unlock();
+      audioButton.hidden = audioReady;
+      parent.focus();
+    });
+  }
   const detach = connectKeyboard(window, game.input);
   let renderer: Renderer | undefined;
   let loading = false;
@@ -63,6 +76,7 @@ async function boot() {
     const dt = (now - last) / 1000;
     last = now;
     if (!loading) game.advance(dt);
+    if (audioReady) game.consumeAudio((command) => audio.dispatch(command));
     const failure = game.logs.findLast(
       (entry) => entry.level === "error",
     )?.message;
@@ -88,6 +102,7 @@ async function boot() {
     request++;
     cancelAnimationFrame(frame);
     detach();
+    audio.dispose();
     renderer?.dispose();
   });
   await change();

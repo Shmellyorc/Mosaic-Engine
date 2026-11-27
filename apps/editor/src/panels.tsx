@@ -79,6 +79,11 @@ function removeEntity(id: string) {
       if (child.parentId === id) child.parentId = entity.parentId;
       if (child.navigation?.target === id) child.navigation.target = null;
     }
+    for (const timeline of scene.timelines ?? []) {
+      timeline.tracks = timeline.tracks.filter(
+        (track) => track.entityId !== id,
+      );
+    }
     if (scene.camera.follow === id) scene.camera.follow = null;
   });
   useEditor.setState({ entityId: null });
@@ -493,6 +498,7 @@ function EntityInspector() {
               editEntity((draft) => {
                 const kind = event.target.value;
                 draft.clips = [];
+                delete draft.animator;
                 if (kind === "rect") draft.visual = { kind, color: "#9670e8" };
                 else if (kind === "sprite" && assets[0])
                   draft.visual = { kind, assetId: assets[0].id };
@@ -528,6 +534,7 @@ function EntityInspector() {
                     assetId: event.target.value,
                   };
                   draft.clips = [];
+                  delete draft.animator;
                 })
               }
             >

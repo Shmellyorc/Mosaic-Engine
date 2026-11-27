@@ -1,4 +1,11 @@
 import {
+  SIGNAL_LAB_ID,
+  labSignal,
+  signalBlueprints,
+  signalLabScene,
+  signalMixer,
+} from "./signal-lab";
+import {
   WORKSHOP_ID,
   workshopBlueprints,
   workshopScene,
@@ -132,12 +139,20 @@ export function exampleProject(): Project {
     signals: [
       { id: "beacon-glow", name: "Beacon Glow", type: "boolean" },
       workshopSignal,
+      labSignal,
     ],
+    mixer: signalMixer(),
     assets: [
       { id: "ridge-art", name: "Ridge panorama", source: landscape },
       { id: "keeper-art", name: "Lantern spritesheet", source: sheet },
     ],
     input: [
+      {
+        id: "signal-pulse",
+        name: "Signal Pulse",
+        negative: [],
+        positive: ["Space"],
+      },
       {
         id: "horizontal",
         name: "Horizontal",
@@ -166,6 +181,7 @@ export function exampleProject(): Project {
         tilemap: { width: 40, height: 20, size: tileSize, tiles: [] },
       },
       workshopScene(player),
+      signalLabScene(player),
     ],
     blueprints: [
       {
@@ -271,6 +287,7 @@ export function exampleProject(): Project {
         ],
       },
       ...workshopBlueprints,
+      ...signalBlueprints,
     ],
   };
 }
@@ -280,5 +297,13 @@ export function workshopProject(): Project {
     ...exampleProject(),
     name: "Ridge Workshop",
     startSceneId: WORKSHOP_ID,
+  };
+}
+
+export function signalLabProject(): Project {
+  return {
+    ...exampleProject(),
+    name: "Lantern Signal Lab",
+    startSceneId: SIGNAL_LAB_ID,
   };
 }

@@ -6,6 +6,7 @@ import {
   type Signal,
   type BlueprintContext,
   type Diagnostic,
+  type EffectCommand,
   type Property,
   type Value,
 } from "@mosaic/blueprints";
@@ -29,6 +30,11 @@ import {
 } from "./tiles";
 import { PhysicsWorld } from "./physics";
 import { NavigationGrid, NavigationWorld } from "./navigation";
+import { AnimationPlayer, MotionWorld } from "./motion";
+import { ParticleWorld } from "./particles";
+import type { AudioCommand } from "./audio";
+export { AudioMixer } from "./audio";
+export { AnimationPlayer, sampleClip } from "./motion";
 export type { Camera } from "./camera";
 export { TileWorld, TileGrid, autotileFrame, TILE_CHUNK_SIZE } from "./tiles";
 export { cameraView } from "./camera";
@@ -83,8 +89,7 @@ export type RenderFrame = {
 type WorldEntity = {
   entity: Entity;
   variables: Map<string, Value>;
-  clip: string | null;
-  elapsed: number;
+  animation?: AnimationPlayer;
 };
 type WorldTransform = { matrix: Matrix2D; alpha: number; visible: boolean };
 
@@ -214,6 +219,10 @@ export class Game {
   private tiles: TileWorld;
   private physics: PhysicsWorld;
   private navigation: NavigationWorld;
+  private motion: MotionWorld;
+  private particles: ParticleWorld;
+  private soundIds: Set<string>;
+  private audio: AudioCommand[] = [];
   private currentCamera?: Camera;
   private signalTypes = new Map<string, Signal["type"]>();
   private lights: WorldEntity[];
@@ -247,8 +256,10 @@ export class Game {
       const state: WorldEntity = {
         entity,
         variables: new Map(),
-        clip: null,
-        elapsed: 0,
+        animation:
+          entity.visual?.kind === "sprite" && entity.clips.length
+            ? new AnimationPlayer(entity.animator, entity.clips)
+            : undefined,
       };
       this.world.set(entity.id, state);
       return state;
@@ -259,6 +270,12 @@ export class Game {
       new NavigationGrid(this.tiles, entities),
       entities,
     );
+    this.motion = new MotionWorld(
+      scene.timelines ?? [],
+      (id) => this.world.get(id)?.entity,
+    );
+    this.particles = new ParticleWorld(entities);
+    this.soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
     this.lights = this.entities.filter(({ entity }) => entity.light);
     this.layerVisible = new Map(
       scene.layers.map((layer) => [layer.id, layer.visible]),
@@ -367,14 +384,13 @@ export class Game {
           (reference.kind === "asset" && this.assets.has(reference.id))),
       emit: (id, value) => this.scheduler.emit(id, value),
       animate: (clip) => {
-        if (state.clip === clip) return;
         if (entity.visual?.kind !== "sprite")
           throw new Error("Animation requires an assigned sprite.");
-        if (!entity.clips.some((c) => c.name === clip))
+        if (!state.animation)
           throw new Error(`Animation "${clip}" is missing.`);
-        state.clip = clip;
-        state.elapsed = 0;
+        state.animation.play(clip);
       },
+      effect: (command) => this.effect(state, command),
       log: (blockId, value) =>
         this.log({
           level: "info",
@@ -384,6 +400,75 @@ export class Game {
         }),
       fault: (diagnostic) => this.fault(entity.id, diagnostic),
     };
+  }
+
+  private effect(state: WorldEntity, command: EffectCommand) {
+    switch (command.kind) {
+      case "animationParameter":
+        if (!state.animation) throw new Error("The entity has no animator.");
+        state.animation.parameter(command.parameterId, command.value);
+        break;
+      case "timeline":
+        this.motion.play(command.timelineId, command.playing);
+        break;
+      case "tween":
+        this.motion.tween(
+          state.entity,
+          command.property,
+          command.value,
+          command.seconds,
+          command.ease,
+        );
+        break;
+      case "particles":
+        this.particles.control(state.entity.id, command.operation);
+        break;
+      case "sound":
+        if (!this.soundIds.has(command.soundId))
+          throw new Error("The sound is missing from this project.");
+        if (this.audio.length === 128) this.audio.shift();
+        this.audio.push({ soundId: command.soundId, playing: command.playing });
+        break;
+    }
+  }
+
+  consumeAudio(play: (command: AudioCommand) => void) {
+    for (const command of this.audio) play(command);
+    this.audio.length = 0;
+  }
+
+  seekTimeline(id: string, seconds: number) {
+    this.motion.seek(id, seconds);
+  }
+
+  previewParticles(id: string, burst: boolean, delta: number) {
+    if (burst) this.particles.control(id, "burst");
+    if (delta > 0) this.stepParticles(Math.min(delta, 0.05));
+  }
+
+  private stepParticles(delta: number) {
+    if (!this.particles.hasEmitters) return;
+    let transforms: Map<string, WorldTransform> | undefined;
+    this.particles.step(delta, (id) => {
+      const entity = this.world.get(id)!.entity;
+      if (!entity.visible || !this.layerVisible.get(entity.layerId)) return;
+      const { x, y, width, height, scaleX, scaleY, rotation } =
+        entity.transform;
+      if (entity.parentId) {
+        transforms ??= this.transforms();
+        const world = transforms.get(id)!;
+        return world.visible
+          ? transformPoint(world.matrix, width / 2, height / 2)
+          : undefined;
+      }
+      const radians = ((rotation % 360) * Math.PI) / 180;
+      const halfWidth = (width * scaleX) / 2,
+        halfHeight = (height * scaleY) / 2;
+      return {
+        x: x + Math.cos(radians) * halfWidth - Math.sin(radians) * halfHeight,
+        y: y + Math.sin(radians) * halfWidth + Math.cos(radians) * halfHeight,
+      };
+    });
   }
 
   private target(entity: Entity, id?: string) {
@@ -429,6 +514,7 @@ export class Game {
   start() {
     if (this.started) return;
     this.started = true;
+    this.motion.start();
     this.scheduler.start(this.program);
   }
   private beginTick() {
@@ -438,6 +524,7 @@ export class Game {
   private finishTick() {
     if (this.scheduler.paused || !this.tickPending) return;
     this.tickPending = false;
+    this.motion.step(STEP);
     this.navigation.step(STEP, this.physics);
     this.physics.step(STEP, ({ entityId, otherId, phase }) => {
       const body = this.world.get(entityId)?.entity.body;
@@ -459,7 +546,8 @@ export class Game {
       this.currentCamera,
       STEP,
     );
-    for (const state of this.entities) if (state.clip) state.elapsed += STEP;
+    for (const state of this.entities) state.animation?.step(STEP);
+    this.stepParticles(STEP);
     this.time += STEP;
   }
   advance(seconds: number) {
@@ -620,12 +708,45 @@ export class Game {
         if (!(mask & WEST)) edge(0, border, border, size - 2 * border);
       });
     };
+    const particlesByLayer = this.particles.hasEmitters
+      ? new Map<string, Draw[]>()
+      : undefined;
+    this.particles.forEach((layerId, x, y, size, alpha, color) => {
+      if (!this.layerVisible.get(layerId)) return;
+      const half = size / 2;
+      if (
+        x + half < area.x ||
+        x - half > area.x + area.width ||
+        y + half < area.y ||
+        y - half > area.y + area.height
+      )
+        return;
+      const draws = particlesByLayer!.get(layerId) ?? [];
+      if (!draws.length) particlesByLayer!.set(layerId, draws);
+      draws.push({
+        kind: "rect",
+        color,
+        width: size,
+        height: size,
+        alpha,
+        matrix: multiply(cameraMatrix, translation(x - half, y - half)),
+      });
+    });
+    let renderedLayer: string | undefined;
+    const flushParticles = () => {
+      if (!particlesByLayer || !renderedLayer) return;
+      const particles = particlesByLayer.get(renderedLayer);
+      if (particles) draws.push(...particles);
+      renderedLayer = undefined;
+    };
     let layerIndex = 0;
     const paintLayers = (through: number) => {
       for (; layerIndex <= through; layerIndex++) {
+        flushParticles();
         if (layerIndex === 1) paint(this.tiles.legacy, 1);
         const layer = this.scene.layers[layerIndex];
         if (!layer?.visible) continue;
+        renderedLayer = layer.id;
         for (const { definition, grid } of this.tiles.layers) {
           if (definition.visible && definition.layerId === layer.id)
             paint(grid, definition.opacity);
@@ -670,20 +791,12 @@ export class Game {
       )
         continue;
       if (visual.kind === "sprite") {
-        const clip = state.clip
-          ? entity.clips.find((entry) => entry.name === state.clip)
-          : undefined;
-        const step = clip ? Math.floor(state.elapsed * clip.fps) : 0;
-        const frame =
-          clip?.frames[
-            clip.loop
-              ? step % clip.frames.length
-              : Math.min(step, clip.frames.length - 1)
-          ];
+        const frame = state.animation?.frame();
         draws.push({ ...base, ...visual, frame: frame ?? visual.frame });
       } else draws.push({ ...base, ...visual });
     }
     paintLayers(Math.max(1, this.scene.layers.length - 1));
+    flushParticles();
     const config = this.scene.lighting;
     const lighting: LightingPass | undefined = config?.enabled
       ? { ambient: config.ambient, worldDraws: draws.length, lights: [] }

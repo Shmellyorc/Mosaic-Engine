@@ -2,7 +2,9 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { signalWav } from "../packages/example/src/signal-lab";
 import {
+  createEmitter,
   createEntity,
   createProject,
   parseProject,
@@ -741,5 +743,244 @@ test("the offline world uses the same point lighting in PixiJS and Canvas 2D", a
   await page.goto(pathToFileURL(resolve("dist/ridge-workshop.html")).href);
   await expect(page.locator("#game-title")).toHaveText("Ridge Workshop");
   await expect(page.locator("#game canvas")).toBeVisible();
+  await expect(page.locator("#runtime-error")).toBeEmpty();
+});
+
+test("authors an Animator transition, timeline keys, a particle burst and a routed WAV", async ({
+  page,
+}) => {
+  test.setTimeout(75_000);
+  await editor(page);
+  const nav = page.getByRole("navigation", { name: "Engine workspaces" });
+  const workspace = (name: string) =>
+    nav.getByRole("button", { name, exact: true });
+  const byName = (name: string) =>
+    page.getByRole("button", { name, exact: true });
+  const value = async (label: string, text: string) => {
+    const input = page.getByLabel(label, { exact: true });
+    await input.fill(text);
+    await input.press("Enter");
+    await expect(input).toHaveValue(text);
+  };
+  await workspace("Animator").click();
+  await byName("State Machine").click();
+  await byName("State").click();
+  await byName("State").click();
+  await page.getByLabel("State 2 clip").selectOption("walk");
+  await byName("Parameter").click();
+  await value("Parameter name", "Stride test");
+  await byName("Transition").click();
+  await byName("Play Preview").click();
+  await value("Stride test preview value", "1");
+  await expect(
+    page.getByRole("region", { name: "State machine preview" }),
+  ).toContainText("State 2");
+  await byName("Pause Preview").click();
+
+  await workspace("Timeline").click();
+  await page
+    .locator(".workspace-bar")
+    .getByRole("button", { name: "Timeline", exact: true })
+    .click();
+  await value("Timeline name", "Orbit test");
+  await byName("Track").click();
+  await page.getByLabel("Track property").selectOption("rotation");
+  await byName("Key").click();
+  await page.getByLabel("Timeline playhead").fill("1");
+  await byName("Key").click();
+  await value("Keyframe value", "45");
+  await page.getByLabel("Keyframe easing").selectOption("out");
+  await expect(byName("Key at 1 seconds")).toBeVisible();
+  await expect(
+    page.getByLabel("Timeline scene preview").locator("canvas"),
+  ).toBeVisible();
+
+  await workspace("Particles").click();
+  await byName("Emitter").click();
+  await value("Burst count", "14");
+  await page.getByLabel("Emit on scene start").uncheck();
+  await byName("Preview Burst").click();
+  await expect(
+    page.getByLabel("Particle emitter preview").locator("canvas"),
+  ).toBeVisible();
+
+  await workspace("Audio").click();
+  await byName("Bus").click();
+  const busName = page
+    .getByRole("region", { name: "Bus 2 bus" })
+    .getByLabel("Bus name");
+  await busName.fill("Field Recordings");
+  await busName.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Field Recordings bus" }),
+  ).toBeVisible();
+  const soundFile = page.waitForEvent("filechooser");
+  await byName("Import WAV").click();
+  await (
+    await soundFile
+  ).setFiles({
+    name: "field-tone.wav",
+    mimeType: "audio/wav",
+    buffer: Buffer.from(signalWav()),
+  });
+  await expect(page.getByLabel("Sound name")).toHaveValue("field-tone.wav");
+  await page
+    .getByLabel("Sound output bus")
+    .selectOption({ label: "Field Recordings" });
+  await byName("Audition").click();
+  await expect
+    .poll(() =>
+      page
+        .getByLabel("Preview output peak")
+        .evaluate((meter: HTMLMeterElement) => meter.value),
+    )
+    .toBeGreaterThan(0.02);
+  await workspace("Blueprints").click();
+  const stack = page.locator('[data-block-id="when-moving"]');
+  await stack.getByLabel("Add block to then").selectOption("sound");
+  await stack
+    .getByLabel("Sound", { exact: true })
+    .selectOption({ label: "field-tone.wav" });
+
+  const download = page.waitForEvent("download");
+  await byName("Save project").click();
+  const stored = await readFile((await (await download).path())!, "utf8");
+  const saved = parseProject(stored);
+  const scene = saved.scenes[0];
+  expect(
+    scene.entities.find(({ id }) => id === "player")!.animator,
+  ).toMatchObject({
+    states: [{ clipId: "idle" }, { clipId: "walk" }],
+    parameters: [{ name: "Stride test" }],
+    transitions: [{ condition: { kind: "parameter", op: "gt" } }],
+  });
+  expect(
+    scene.entities.find(({ id }) => id === "player")!.particles,
+  ).toMatchObject({ enabled: false, burst: 14 });
+  expect(scene.timelines?.[0]).toMatchObject({
+    name: "Orbit test",
+    tracks: [
+      {
+        property: "rotation",
+        keys: [
+          { time: 0, value: 0 },
+          { time: 1, value: 45, ease: "out" },
+        ],
+      },
+    ],
+  });
+  const sound = saved.mixer!.sounds.at(-1)!;
+  expect(sound).toMatchObject({
+    name: "field-tone.wav",
+    bus: saved.mixer!.buses.at(-1)!.id,
+  });
+  const behaviour = saved.blueprints.find(({ id }) => id === "movement")!;
+  const branch = behaviour.events
+    .find(({ kind }) => kind === "update")
+    ?.blocks.find(({ id }) => id === "when-moving");
+  expect(branch).toMatchObject({
+    then: expect.arrayContaining([
+      {
+        id: expect.any(String),
+        kind: "sound",
+        soundId: sound.id,
+        playing: true,
+      },
+    ]),
+  });
+
+  const chooser = page.waitForEvent("filechooser");
+  await fileMenu(page, "Open Project");
+  await (
+    await chooser
+  ).setFiles({
+    name: "effects.mosaic.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(stored),
+  });
+  await expect(
+    page.getByText("Project opened.", { exact: true }),
+  ).toBeVisible();
+  await workspace("Timeline").click();
+  await expect(page.getByLabel("Timeline name")).toHaveValue("Orbit test");
+  await expect(byName("Key at 1 seconds")).toBeVisible();
+  await workspace("Audio").click();
+  await byName("field-tone.wav").click();
+  await expect(
+    page.getByLabel("Sound output bus").locator("option:checked"),
+  ).toHaveText("Field Recordings");
+});
+
+test("offline Signal Lab plays the chime and renders particles through both backends", async ({
+  context,
+  page,
+}, testInfo) => {
+  await context.setOffline(true);
+  await page.addInitScript(() => {
+    const audio = AudioBufferSourceNode.prototype.start;
+    const captures: number[] = [];
+    AudioBufferSourceNode.prototype.start = function (
+      ...args: Parameters<typeof audio>
+    ) {
+      captures.push(this.buffer?.length ?? 0);
+      return audio.apply(this, args);
+    };
+    Object.assign(window, { mosaicAudioPlayback: captures });
+  });
+  await page.goto(pathToFileURL(resolve("dist/lantern-signal-lab.html")).href);
+  await expect(page.locator("#game-title")).toHaveText("Lantern Signal Lab");
+  await expect(page.locator("#runtime-status")).toHaveText(
+    "PixiJS accelerated",
+  );
+  await page.getByRole("button", { name: "Enable audio" }).click();
+  await expect(page.getByRole("button", { name: "Enable audio" })).toBeHidden();
+  await page.keyboard.press("Space", { delay: 50 });
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(window, "mosaicAudioPlayback")))
+    .toEqual([5760]);
+  await expect(page.locator("#runtime-error")).toBeEmpty();
+
+  const template = await readFile(
+    resolve("dist/lantern-signal-lab.html"),
+    "utf8",
+  );
+  const project = createProject("Particle verification");
+  const scene = project.scenes[0];
+  const emitter = createEntity(scene.layers[0].id);
+  Object.assign(emitter.transform, { x: 296, y: 156 });
+  emitter.visual = null;
+  emitter.particles = {
+    ...createEmitter(),
+    color: "#ffbb77",
+    size: 16,
+    endSize: 16,
+    speed: 0,
+    gravity: 0,
+    rate: 120,
+    limit: 8,
+  };
+  scene.entities.push(emitter);
+  const fixture = template.replace(
+    /(<script id="mosaic-project" type="application\/json">)[\s\S]*?(<\/script>)/,
+    (_all, open, close) =>
+      open + serializeProject(project).replaceAll("<", "\\u003c") + close,
+  );
+  const filename = testInfo.outputPath("particle-verification.html");
+  await writeFile(filename, fixture);
+  await page.goto(pathToFileURL(filename).href);
+  const status = page.locator("#runtime-status");
+  const canvas = page.locator("#game canvas");
+  const sample = async () => {
+    const expected = [255, 187, 119];
+    const [actual] = await pixels(canvas, [[0.5, 0.5]]);
+    return Math.max(
+      ...actual.map((channel, i) => Math.abs(channel - expected[i])),
+    );
+  };
+  await expect(status).toHaveText("PixiJS accelerated");
+  await expect.poll(sample).toBeLessThanOrEqual(3);
+  await page.locator("#backend").selectOption("canvas");
+  await expect(status).toHaveText("Canvas 2D");
+  await expect.poll(sample).toBeLessThanOrEqual(3);
   await expect(page.locator("#runtime-error")).toBeEmpty();
 });

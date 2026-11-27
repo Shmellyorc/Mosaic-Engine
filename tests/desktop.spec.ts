@@ -1,9 +1,10 @@
 import { _electron, expect, test } from "@playwright/test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseProject } from "@mosaic/model";
+import { signalWav } from "../packages/example/src/signal-lab";
 
 test("packaged desktop creates, imports, saves, opens and exports a working project", async ({
   browser,
@@ -31,6 +32,8 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
   try {
     const projectFolder = join(work, "project");
     const image = resolve("packages/example/assets/lantern.png");
+    const sound = join(work, "native-tone.wav");
+    await writeFile(sound, signalWav());
     const exported = join(work, "project.html");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(projectFolder);
@@ -39,22 +42,22 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
         dialog.showOpenDialog = async (
           windowOrOptions,
           options?: Electron.OpenDialogOptions,
-        ) => ({
-          canceled: false,
-          filePaths: [
-            (
-              options ?? (windowOrOptions as Electron.OpenDialogOptions)
-            ).properties?.includes("openFile")
+        ) => {
+          const selection =
+            options ?? (windowOrOptions as Electron.OpenDialogOptions);
+          const path = selection.filters?.[0]?.extensions.includes("wav")
+            ? fixtures.sound
+            : selection.properties?.includes("openFile")
               ? fixtures.image
-              : fixtures.projectFolder,
-          ],
-        });
+              : fixtures.projectFolder;
+          return { canceled: false, filePaths: [path] };
+        };
         dialog.showSaveDialog = async () => ({
           canceled: false,
           filePath: fixtures.exported,
         });
       },
-      { image, projectFolder, exported },
+      { image, sound, projectFolder, exported },
     );
     const page = await electron.firstWindow();
     await expect(
@@ -66,7 +69,13 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     }));
     expect(bridge).toEqual({
       node: "undefined",
-      methods: ["exportGame", "importImage", "openProject", "saveProject"],
+      methods: [
+        "exportGame",
+        "importImage",
+        "importSound",
+        "openProject",
+        "saveProject",
+      ],
     });
     async function fileAction(name: string) {
       await page
@@ -79,6 +88,25 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await page.getByLabel("Project name").fill("Native Trail");
     await page
       .getByRole("button", { name: "Create Project", exact: true })
+      .click();
+    const workspaces = page.getByRole("navigation", {
+      name: "Engine workspaces",
+    });
+    await workspaces
+      .getByRole("button", { name: "Audio", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Import WAV" }).click();
+    await expect(page.getByLabel("Sound name")).toHaveValue("native-tone.wav");
+    await page.getByRole("button", { name: "Audition", exact: true }).click();
+    await expect
+      .poll(async () =>
+        page
+          .getByLabel("Preview output peak")
+          .evaluate((meter: HTMLMeterElement) => meter.value),
+      )
+      .toBeGreaterThan(0.02);
+    await workspaces
+      .getByRole("button", { name: "Scene", exact: true })
       .click();
     await fileAction("Import Image");
     await expect(
@@ -125,6 +153,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     const saved = parseProject(await readFile(path, "utf8"));
     expect(saved.name).toBe("Native Trail");
     expect(saved.assets).toHaveLength(1);
+    expect(saved.mixer?.sounds[0].name).toBe("native-tone.wav");
     const entity = saved.scenes[0].entities[0];
     expect(entity.name).toBe("Lantern");
     expect(entity.visual).toEqual({

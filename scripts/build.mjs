@@ -12,7 +12,7 @@ const sample = await build({
   absWorkingDir: root,
   stdin: {
     contents:
-      'export { exampleProject, workshopProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
+      'export { exampleProject, workshopProject, signalLabProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
     resolveDir: root,
   },
   format: "esm",
@@ -22,9 +22,10 @@ const sample = await build({
   write: false,
   plugins: [pngInline],
 });
-const { exampleProject, workshopProject, gameHtml } = await import(
-  `data:text/javascript;base64,${Buffer.from(sample.outputFiles[0].contents).toString("base64")}`
-);
+const { exampleProject, workshopProject, signalLabProject, gameHtml } =
+  await import(
+    `data:text/javascript;base64,${Buffer.from(sample.outputFiles[0].contents).toString("base64")}`
+  );
 await Promise.all([
   vite({ configFile: resolve(root, "apps/editor/vite.config.ts") }),
   ...["main", "preload"].map((name) =>
@@ -49,6 +50,10 @@ await Promise.all([
   writeFile(
     resolve(dist, "ridge-workshop.html"),
     gameHtml(workshopProject(), bundle),
+  ),
+  writeFile(
+    resolve(dist, "lantern-signal-lab.html"),
+    gameHtml(signalLabProject(), bundle),
   ),
   copyFile(resolve(root, "LICENSE"), resolve(desktop, "LICENSE")),
   writeFile(

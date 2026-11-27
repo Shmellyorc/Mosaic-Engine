@@ -1471,3 +1471,186 @@ button.tree-row {
     padding-inline: 8px;
   }
 }
+
+.effect-workspace {
+  container-type: inline-size;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+}
+.effect-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+.effect-row,
+.effect-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.effect-subtitle {
+  min-height: 29px;
+  justify-content: space-between;
+}
+.effect-subtitle > strong {
+  color: #e1d4f4;
+}
+.effect-row > :is(input:not([type="checkbox"]), select) {
+  flex: 1;
+  min-width: 0;
+}
+.effect-tabs > [aria-pressed="true"],
+.sound-row[aria-pressed="true"] {
+  border-color: #8058b0;
+  background: #3c2a58;
+  color: #f4e7ff;
+}
+.workspace > .effect-tabs {
+  padding: 8px 12px 0;
+  margin: 0;
+}
+.effect-stack {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.effect-card,
+.effect-preview-card {
+  background: #191b2b;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 9px;
+  min-width: 0;
+}
+.effect-card.entry {
+  border-color: #9468cd;
+  background: #27203e;
+}
+.effect-card.entry svg {
+  color: #d5b1ff;
+}
+.effect-card > .field > :is(input, select),
+.effect-preview-card .field > input {
+  max-width: 100%;
+  min-width: 0;
+}
+.effect-preview-card .animation-preview {
+  margin: 7px 0;
+  border-radius: 5px;
+}
+.timeline-preview {
+  position: relative;
+  overflow: hidden;
+  min-height: 170px;
+  height: clamp(170px, 28vh, 290px);
+  display: flex;
+  flex-direction: column;
+}
+.timeline-preview .render-surface {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+.timeline-controls > input[type="range"] {
+  width: 100%;
+}
+.timeline-controls output {
+  color: #baaccf;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-ruler {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font:
+    11px ui-monospace,
+    monospace;
+}
+.timeline-lane {
+  height: 31px;
+  position: relative;
+  margin-inline: 13px;
+  border-block: 1px solid #373045;
+  background:
+    repeating-linear-gradient(90deg, #29253b 0px 1px, transparent 1px 12.5%),
+    #141421;
+}
+.timeline-lane > i {
+  position: absolute;
+  height: 100%;
+  border-inline-start: 1px solid #c07dff;
+  pointer-events: none;
+}
+.timeline-lane .timeline-diamond {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  min-height: 25px;
+  padding-inline: 4px;
+  color: #8ed1f2;
+  border-color: transparent;
+  background: transparent;
+}
+.timeline-lane .timeline-diamond[aria-pressed="true"] {
+  color: #f5d3ff;
+  background: #674595;
+  border-color: #9a70ca;
+}
+.key-fields {
+  flex-wrap: wrap;
+}
+.key-fields > .field {
+  flex: 1 1 110px;
+}
+.key-fields > .field > :is(input, select) {
+  min-width: 0;
+  width: 100%;
+}
+.mixer-buses {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+.audio-gain {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.audio-gain > input {
+  flex: 1;
+  width: 100%;
+  min-width: 35px;
+  accent-color: var(--accent);
+}
+.audio-gain > output {
+  min-width: 3ch;
+  text-align: right;
+  color: #ceb5ef;
+  font-variant-numeric: tabular-nums;
+}
+.audio-meter {
+  width: 100%;
+  height: 10px;
+  accent-color: #73daa6;
+}
+.sound-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr);
+}
+.sound-row {
+  justify-content: flex-start;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+@container (max-width: 505px) {
+  .effect-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .key-fields > .field {
+    flex-basis: 100px;
+  }
+}

@@ -18,7 +18,8 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 - **Scene** creates scenes, entities and child entities. Use the dockable Inspector or Scene Settings to adjust components, layer order, camera follow and transforms. Drag visible entities to move them, Alt-drag to pan, and scroll to zoom.
 - **Blueprints** edits typed expressions, nested branches and loops, reusable functions, and scene events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block.
 - **Tilemap**, **Physics**, **Cameras**, **Navigation**, and **Lighting** provide dedicated world workspaces with editable controls and viewport previews.
-- **Animator**, **UI**, and **Input** edit spritesheet clips, place HUD labels, and bind keyboard axes.
+- **Animator**, **Timeline**, **Particles**, and **Audio** provide dedicated authoring and preview workspaces for gameplay effects.
+- **UI** and **Input** place HUD labels and bind keyboard axes.
 - Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
 - **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring.
@@ -43,26 +44,35 @@ Open **File → Open Lantern Ridge Sample** for a self-contained example. Move t
 
 Choose **Ridge Workshop** from the sample’s scene list and press Play. Move with the arrow keys or WASD, watch the Pathfinder route around the walls, and cross the green pressure pad to trigger the HUD event.
 
+## Animate and mix effects
+
+- **Animator** edits spritesheet frames, playback speed and clip loops. In **State Machine**, assign clips to states, mark an entry state, and order transitions. A transition can listen to a numeric parameter or wait for a non-looping state clip to finish. Preview with temporary parameter values, or use **Set Animation Parameter** to drive the machine from a Blueprint. **Play Animation** still works for direct clip playback.
+- **Timeline** records position, rotation, opacity, and scale keys on named entity tracks. Drag the playhead or click a key to preview the scene. Set an easing curve on each key to control its outgoing segment. Enable autoplay or use **Control Timeline** from a Blueprint. **Tween Property** animates the current entity from its live value with the same easing options.
+- **Particles** emits seeded bursts or continuous, world-space particles from an entity’s center. Configure emission rate, direction, spread, speed, gravity, lifetime, size, color, and live limits. Use **Control Particles** for bursts and start or stop commands. Both renderers use the same camera-culled draws.
+- **Audio** imports embedded 16-bit PCM WAV files up to 8 MiB at 8–96 kHz, mono or stereo. Route sounds to the master output or a separate gain and mute bus. The audition meter measures the preview output. **Control Sound** plays one-shots or loops according to the sound settings and can stop active voices.
+
+Choose **Lantern Signal Lab** from the sample’s scene list. Move with A/D or the arrow keys to see the Animator change state. Press Space to fire the beacon, sweep the charge indicator, and trigger a particle burst and chime. Enable audio in the exported player before sending a signal.
+
 ## Rendering and export
 
 The same runtime feeds the PixiJS accelerated backend and the independent Canvas 2D renderer. **Auto Renderer** tries acceleration and switches to Canvas 2D if initialization fails or the rendering context is lost. Choose a backend explicitly from the toolbar. Canvas 2D is the compatibility API and can use hardware acceleration depending on the browser.
 
-**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images. Open that file in a browser to play. The export runs without React or Electron.
+**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images and WAV sounds. Open that file in a browser to play. The export runs without React or Electron.
 
-A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds its images and preserves entity IDs, hierarchy, scene settings, input axes, spritesheet clips and Blueprint data.
+A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds images and sounds and preserves entity IDs, hierarchy, scene settings, input axes, Animator definitions, effects and Blueprint data.
 
 ## Development and verification
 
-| Path                  | Responsibility                                                               |
-| --------------------- | ---------------------------------------------------------------------------- |
-| `apps/desktop`        | Electron lifecycle, sandboxed preload bridge, native dialogs and project I/O |
-| `apps/editor`         | React editor, docking, document history, browser storage and authoring tools |
-| `apps/game`           | Standalone browser player and export document                                |
-| `packages/model`      | Versioned format, validation and serialization                               |
-| `packages/blueprints` | Typed AST, compiler and block diagnostics                                    |
-| `packages/runtime`    | Entity state, fixed 60 Hz simulation, input, camera and draw commands        |
-| `packages/render`     | PixiJS, Canvas 2D and backend selection                                      |
-| `packages/example`    | Lantern Ridge project and assets                                             |
+| Path                  | Responsibility                                                                 |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `apps/desktop`        | Electron lifecycle, sandboxed preload bridge, native dialogs and project I/O   |
+| `apps/editor`         | React editor, docking, document history, browser storage and authoring tools   |
+| `apps/game`           | Standalone browser player and export document                                  |
+| `packages/model`      | Versioned format, validation and serialization                                 |
+| `packages/blueprints` | Typed AST, compiler and block diagnostics                                      |
+| `packages/runtime`    | Entity state, fixed 60 Hz simulation, motion, effects, audio and draw commands |
+| `packages/render`     | PixiJS, Canvas 2D and backend selection                                        |
+| `packages/example`    | Lantern Ridge project and assets                                               |
 
 ```sh
 npm run typecheck
@@ -74,6 +84,6 @@ npx playwright install chromium
 npm run smoke
 ```
 
-The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html` and `dist/ridge-workshop.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and both offline samples as run artifacts.
+The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, and `dist/lantern-signal-lab.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the offline samples as run artifacts.
 
 MIT licensed.

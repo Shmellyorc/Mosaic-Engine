@@ -140,6 +140,30 @@ export const expressionSchema: z.ZodType<Expression> = z.lazy(() =>
     }),
   ]),
 );
+export const motionPropertySchema = z.enum([
+  "x",
+  "y",
+  "rotation",
+  "alpha",
+  "scaleX",
+  "scaleY",
+]);
+export const easingSchema = z.enum(["linear", "step", "in", "out", "in-out"]);
+export type MotionProperty = z.infer<typeof motionPropertySchema>;
+export type Easing = z.infer<typeof easingSchema>;
+export type EffectCommand =
+  | { kind: "animationParameter"; parameterId: string; value: number }
+  | { kind: "timeline"; timelineId: string; playing: boolean }
+  | {
+      kind: "tween";
+      property: MotionProperty;
+      value: number;
+      seconds: number;
+      ease: Easing;
+    }
+  | { kind: "particles"; operation: "burst" | "start" | "stop" }
+  | { kind: "sound"; soundId: string; playing: boolean };
+
 type BlockData =
   | { kind: "set"; variable: string; value: Expression }
   | { kind: "let"; name: string; type: ValueType; value: Expression }
@@ -155,6 +179,17 @@ type BlockData =
       target?: Expression;
     }
   | { kind: "animate"; clip: string }
+  | { kind: "animationParameter"; parameterId: string; value: Expression }
+  | { kind: "timeline"; timelineId: string; playing: boolean }
+  | {
+      kind: "tween";
+      property: MotionProperty;
+      value: Expression;
+      seconds: Expression;
+      ease: Easing;
+    }
+  | { kind: "particles"; operation: "burst" | "start" | "stop" }
+  | { kind: "sound"; soundId: string; playing: boolean }
   | { kind: "log"; value: Expression }
   | {
       kind: "call";
@@ -217,6 +252,37 @@ const blockSchema: z.ZodType<Block> = z.lazy(() =>
       target: expressionSchema.optional(),
     }),
     z.object({ id, kind: z.literal("animate"), clip: text }),
+    z.object({
+      id,
+      kind: z.literal("animationParameter"),
+      parameterId: id,
+      value: expressionSchema,
+    }),
+    z.object({
+      id,
+      kind: z.literal("timeline"),
+      timelineId: id,
+      playing: z.boolean(),
+    }),
+    z.object({
+      id,
+      kind: z.literal("tween"),
+      property: motionPropertySchema,
+      value: expressionSchema,
+      seconds: expressionSchema,
+      ease: easingSchema,
+    }),
+    z.object({
+      id,
+      kind: z.literal("particles"),
+      operation: z.enum(["burst", "start", "stop"]),
+    }),
+    z.object({
+      id,
+      kind: z.literal("sound"),
+      soundId: id,
+      playing: z.boolean(),
+    }),
     z.object({ id, kind: z.literal("log"), value: expressionSchema }),
     z.object({
       id,

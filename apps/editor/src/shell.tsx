@@ -14,7 +14,10 @@ import {
   type SerializedDockview,
 } from "dockview-react";
 import {
+  AudioLines,
   Box,
+  Clock3,
+  Sparkles,
   Braces,
   Bug,
   Code2,
@@ -52,6 +55,9 @@ import {
   addEntity,
 } from "./panels";
 import { AnimatorWorkspace, InputWorkspace } from "./systems";
+import { TimelineWorkspace } from "./timeline";
+import { ParticlesWorkspace } from "./particles";
+import { AudioWorkspace } from "./audio";
 import { GamePreview, SceneViewport } from "./viewport";
 import { worldTools } from "./world";
 import {
@@ -75,6 +81,9 @@ const icons = {
   Blueprints: Braces,
   ...worldTools,
   Animator: Film,
+  Timeline: Clock3,
+  Particles: Sparkles,
+  Audio: AudioLines,
   UI: Monitor,
   Input: Gamepad2,
 };
@@ -149,6 +158,9 @@ function WorkspacePanel() {
       {workspace === "Navigation" && <SceneViewport worldTool="Navigation" />}
       {workspace === "Lighting" && <SceneViewport worldTool="Lighting" />}
       {workspace === "Animator" && <AnimatorWorkspace />}
+      {workspace === "Timeline" && <TimelineWorkspace />}
+      {workspace === "Particles" && <ParticlesWorkspace />}
+      {workspace === "Audio" && <AudioWorkspace />}
       {workspace === "UI" && (
         <div className="workspace scene-wrap">
           <div className="context-actions">

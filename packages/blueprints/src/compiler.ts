@@ -6,6 +6,7 @@ import {
   type Blueprint,
   type Diagnostic,
   type Expression,
+  type EffectCommand,
   type Property,
   type Signal,
   type Value,
@@ -24,10 +25,15 @@ export type BlueprintContext = {
   query(query: "self" | "parent" | "scene"): Value;
   exists(reference: Value): boolean;
   animate(clip: string): void;
+  effect?(command: EffectCommand): void;
   log(blockId: string, value: Value): void;
   fault(diagnostic: Diagnostic): void;
   emit(signalId: string, value?: Value): void;
 };
+function dispatchEffect(ctx: BlueprintContext, command: EffectCommand) {
+  if (!ctx.effect) throw new Error("This runtime does not provide effects.");
+  ctx.effect(command);
+}
 type Locals = Map<string, Value>;
 type Scope = { locals: Locals; parent?: Scope };
 type Frame = { entryId: string; name: string; parent?: Frame; depth: number };
@@ -576,6 +582,41 @@ export function compileBlueprint(
         if (!block.clip.trim()) error("Enter an animation clip name.");
         return function* (ctx) {
           ctx.animate(block.clip);
+        };
+      case "animationParameter": {
+        if (block.parameterId === "unassigned")
+          error("Choose an animation parameter.");
+        const value = read(block.value, "number");
+        return function* (ctx, locals) {
+          dispatchEffect(ctx, {
+            kind: block.kind,
+            parameterId: block.parameterId,
+            value: Number(value(ctx, locals)),
+          });
+        };
+      }
+      case "tween": {
+        const value = read(block.value, "number");
+        const seconds = read(block.seconds, "number");
+        return function* (ctx, locals) {
+          dispatchEffect(ctx, {
+            kind: block.kind,
+            property: block.property,
+            value: Number(value(ctx, locals)),
+            seconds: Number(seconds(ctx, locals)),
+            ease: block.ease,
+          });
+        };
+      }
+      case "timeline":
+      case "particles":
+      case "sound":
+        if (block.kind === "timeline" && block.timelineId === "unassigned")
+          error("Choose a timeline.");
+        if (block.kind === "sound" && block.soundId === "unassigned")
+          error("Choose a sound.");
+        return function* (ctx) {
+          dispatchEffect(ctx, block);
         };
       case "log": {
         const value = read(block.value);
