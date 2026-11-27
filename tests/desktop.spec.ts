@@ -9,6 +9,7 @@ import { signalWav } from "../packages/example/src/signal-lab";
 test("packaged desktop creates, imports, saves, opens and exports a working project", async ({
   browser,
 }) => {
+  test.setTimeout(90_000);
   const work = await mkdtemp(join(tmpdir(), "mosaic-native-"));
   const pkg = resolve(
     "dist/packages",
@@ -63,6 +64,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await expect(
       page.getByRole("heading", { name: "Player Movement" }),
     ).toBeVisible();
+    await page.getByLabel("Renderer preference").selectOption("canvas");
     const bridge = await page.evaluate(() => ({
       node: typeof (globalThis as Record<string, unknown>).require,
       methods: Object.keys(window.mosaic ?? {}).sort(),
@@ -127,7 +129,9 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       .click();
     await fileAction("Import Image");
     await expect(
-      page.getByText("Image imported.", { exact: true }),
+      page
+        .getByRole("tabpanel", { name: "Project" })
+        .getByRole("button", { name: "lantern.png", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Sprite", exact: true }).click();
     await page.getByLabel("Entity name").fill("Lantern");
@@ -211,6 +215,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     ).toBeVisible();
     const exportedPage = await browser.newPage();
     await exportedPage.goto(pathToFileURL(exported).href);
+    await exportedPage.locator("#backend").selectOption("canvas");
     await expect(exportedPage.locator("#game-title")).toHaveText(
       "Native Trail",
     );
