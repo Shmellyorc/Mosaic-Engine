@@ -1,4 +1,4 @@
-import { _electron, expect, test } from "@playwright/test";
+import { _electron, chromium, expect, test } from "@playwright/test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -6,9 +6,7 @@ import { pathToFileURL } from "node:url";
 import { parseProject } from "@mosaic/model";
 import { signalWav } from "../packages/example/src/signal-lab";
 
-test("packaged desktop creates, imports, saves, opens and exports a working project", async ({
-  browser,
-}) => {
+test("packaged desktop creates, imports, saves, opens and exports a working project", async () => {
   test.setTimeout(90_000);
   const work = await mkdtemp(join(tmpdir(), "mosaic-native-"));
   const pkg = resolve(
@@ -30,6 +28,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       "--use-angle=swiftshader",
     ],
   });
+  let desktopOpen = true;
   try {
     const projectFolder = join(work, "project");
     const image = resolve("packages/example/assets/lantern.png");
@@ -214,19 +213,41 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await expect(
       page.getByText("Standalone game exported.", { exact: true }),
     ).toBeVisible();
-    const exportedPage = await browser.newPage();
-    await exportedPage.goto(pathToFileURL(exported).href);
-    await exportedPage.locator("#backend").selectOption("canvas");
-    await expect(exportedPage.locator("#game-title")).toHaveText(
-      "Native Trail",
-    );
-    await expect(exportedPage.locator("#game canvas")).toBeVisible();
-    await expect(
-      exportedPage.getByRole("button", { name: "Native Action", exact: true }),
-    ).toBeVisible();
-    await exportedPage.close();
-  } finally {
     await electron.close();
+    desktopOpen = false;
+    const browser = await chromium.launch({ args: ["--disable-gpu"] });
+    try {
+      const exportedPage = await browser.newPage();
+      await exportedPage.addInitScript(() => {
+        Object.defineProperty(navigator, "gpu", { value: undefined });
+        const getContext = HTMLCanvasElement.prototype.getContext;
+        Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+          value(this: HTMLCanvasElement, type: string, ...args: unknown[]) {
+            return type === "2d"
+              ? Reflect.apply(getContext, this, [type, ...args])
+              : null;
+          },
+        });
+      });
+      await exportedPage.goto(pathToFileURL(exported).href);
+      await expect(exportedPage.locator("#game-title")).toHaveText(
+        "Native Trail",
+      );
+      await expect(exportedPage.locator("#runtime-status")).toHaveText(
+        "Canvas 2D",
+      );
+      await expect(exportedPage.locator("#game canvas")).toBeVisible();
+      await expect(
+        exportedPage.getByRole("button", {
+          name: "Native Action",
+          exact: true,
+        }),
+      ).toBeVisible();
+    } finally {
+      await browser.close();
+    }
+  } finally {
+    if (desktopOpen) await electron.close();
     await rm(work, { recursive: true, force: true });
   }
 });
