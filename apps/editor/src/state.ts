@@ -21,6 +21,7 @@ import {
   editors,
   restoreDocumentRefs,
   sceneDocument,
+  sceneFlowDocument,
   type DocumentRef,
   type Workspace,
 } from "./documents";
@@ -361,6 +362,9 @@ export function openEditor(workspace: Workspace) {
   const forScene = (kind: DocumentRef["kind"], id = scene.id) =>
     openDocument({ kind, id, sceneId: scene.id }, { workspace });
   switch (workspace) {
+    case "Scene Flow":
+      openDocument(sceneFlowDocument);
+      break;
     case "Blueprints": {
       const blueprint = selectedBlueprint(state);
       if (blueprint) openDocument({ kind: "blueprint", id: blueprint.id });

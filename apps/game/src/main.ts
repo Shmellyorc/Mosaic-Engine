@@ -118,14 +118,21 @@ async function boot() {
   const sceneLayer = document.createElement("div");
   sceneLayer.style.cssText = "position:absolute;inset:0";
   parent.append(sceneLayer);
-  const surface = game.ui.document.widgets.length
-    ? mountGameUi(parent, game.ui, {
+  let activeUi: typeof game.ui | undefined;
+  let surface: ReturnType<typeof mountGameUi> | undefined;
+  function updateUi() {
+    if (activeUi !== game.ui) {
+      surface?.destroy();
+      activeUi = game.ui;
+      surface = mountGameUi(parent, activeUi, {
         width: project.width,
         height: project.height,
         assets: project.assets,
         report,
-      })
-    : undefined;
+      });
+    }
+    surface?.update();
+  }
   const audio = new AudioMixer(report);
   const audioButton =
     document.querySelector<HTMLButtonElement>("#enable-audio")!;
@@ -190,7 +197,7 @@ async function boot() {
     last = now;
     if (!loading) game.advance(dt);
     showData?.();
-    surface?.update();
+    updateUi();
     if (audioReady) game.consumeAudio((command) => audio.dispatch(command));
     const failure = game.logs.findLast(
       (entry) => entry.level === "error",

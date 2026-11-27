@@ -52,6 +52,12 @@ Under **Behaviour**, retain a primary Blueprint and attach additional instances.
 
 Projects using these additions save as format 2. The editor and runtime continue to read older format 1 projects and interpret single Blueprint assignments as primary attachments. Renderer-independent component storage uses generational runtime handles and cached component queries. Saved documents continue to reference entities and assets by stable IDs.
 
+## Connect scenes
+
+Open `Project.sceneflow` to arrange scene nodes and define directed routes. Routes can be called by a Blueprint or triggered by a typed event. Change selects a primary scene, Add streams another scene into the running world, Unload removes an additive scene, Reload restarts a scene's local state, and Preload prepares its authored entities for activation. Routes can fade across transitions. Additive scenes keep their own tile grids and can sit at a pixel offset in the shared physics and render world.
+
+A persistent entity carries its whole root hierarchy across transitions. Its live transform, handle and Blueprint state are retained. Project globals are shared across scenes. Each scene's own UI and ordinary entities initialize when activated.
+
 ## Blueprint execution
 
 - Use **Functions** in the Inspector to define parameters and a return type. **Call Function** passes typed arguments and can store the result in a variable. **Declare Local** scopes a value to the rest of its stack and its nested blocks. Entity variables retain one value per runtime entity.

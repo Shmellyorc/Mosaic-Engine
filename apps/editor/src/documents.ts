@@ -2,6 +2,7 @@ import type { Project } from "@mosaic/model";
 
 export const editors = [
   "Scene",
+  "Scene Flow",
   "Blueprints",
   "Tilemap",
   "Physics",
@@ -19,6 +20,7 @@ export const editors = [
 export type Workspace = (typeof editors)[number];
 
 export type DocumentKind =
+  | "sceneFlow"
   | "scene"
   | "entity"
   | "blueprint"
@@ -47,6 +49,7 @@ const kinds = new Set<DocumentKind>([
   ...sceneKinds,
   ...entityKinds,
   "blueprint",
+  "sceneFlow",
   "image",
   "prefab",
   "sound",
@@ -65,6 +68,11 @@ export function documentInfo(project: Project, ref: DocumentRef) {
   let extension: string = ref.kind;
   let workspace: Workspace = "Scene";
   switch (ref.kind) {
+    case "sceneFlow":
+      name = "Project";
+      extension = "sceneflow";
+      workspace = "Scene Flow";
+      break;
     case "scene":
       name = scene?.name;
       break;
@@ -153,3 +161,8 @@ export function restoreDocumentRefs(project: Project, input: unknown) {
 export function sceneDocument(sceneId: string): DocumentRef {
   return { kind: "scene", id: sceneId, sceneId };
 }
+
+export const sceneFlowDocument = {
+  kind: "sceneFlow",
+  id: "project-scenes",
+} as const;

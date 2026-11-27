@@ -1,3 +1,5 @@
+import { SceneWorld, type SceneCommand } from "./scene-flow";
+export type { SceneCommand } from "./scene-flow";
 import { UiWorld } from "./ui";
 export { UiWorld } from "./ui";
 export { mountGameUi } from "./ui-dom";
@@ -41,6 +43,7 @@ import {
   SOUTH,
   WEST,
   type TileGrid,
+  type Point,
   type Rect,
 } from "./tiles";
 import { PhysicsWorld } from "./physics";
@@ -306,6 +309,15 @@ export class Game {
   readonly logs: RuntimeLog[] = [];
   scene: Scene;
   private scheduler: BlueprintScheduler;
+  private sceneWorld?: SceneWorld;
+  private sceneQueue: SceneCommand[] = [];
+  private transition?: {
+    command: SceneCommand;
+    elapsed: number;
+    applied: boolean;
+  };
+  private sceneRevision = 0;
+  private previousSceneRevision = 0;
   private reported = new Set<string>();
   private world = new EntityStore<WorldEntity>();
   private prefabMembers = new Map<string, Map<string, string>>();
@@ -367,6 +379,7 @@ export class Game {
     const scene = project.scenes.find((entry) => entry.id === sceneId);
     if (!scene) throw new Error("Scene could not be found.");
     this.scene = scene;
+    if (project.sceneFlow) this.sceneWorld = new SceneWorld(project, sceneId);
     this.input = new InputState(project.input);
     this.data = new GameData(project.id, project.data, slots);
     this.tiles = this.createTiles(scene);
@@ -427,6 +440,7 @@ export class Game {
         if (type !== (payload === undefined ? "void" : typeOf(payload)))
           throw Error("The UI event is missing or has the wrong payload type.");
         this.scheduler.queueUi(id, payload);
+        this.triggerSceneSignal(id, this.scene.id);
       },
       previous,
     );
@@ -436,10 +450,103 @@ export class Game {
   // for retained entities unless the corresponding authored field was changed.
   reloadProject(project: Project) {
     if (project === this.project) return true;
+    if (project.id !== this.project.id) return false;
+    if (!this.sceneWorld && project.sceneFlow)
+      this.sceneWorld = new SceneWorld(this.project, this.scene.id);
+    if (this.sceneWorld && !this.sceneWorld.reload(project)) return false;
+    const scene =
+      this.sceneWorld?.compose() ??
+      project.scenes.find(({ id }) => id === this.scene.id);
+    if (!scene) return false;
+    this.applyScene(project, scene);
+    return true;
+  }
+
+  get sceneStatus() {
+    return (
+      this.sceneWorld?.status ?? {
+        primary: this.scene.id,
+        loaded: [this.scene.id],
+        preloaded: [],
+      }
+    );
+  }
+
+  controlScene(command: SceneCommand) {
+    if (this.sceneQueue.length >= 64)
+      throw new Error("The scene command queue is full.");
+    const { x, y } = command.offset ?? { x: 0, y: 0 };
+    if (
+      ![x, y].every(
+        (value) => Number.isInteger(value) && value >= 0 && value <= 16384,
+      )
+    )
+      throw new Error("Scene offsets must be whole pixels from 0 to 16384.");
+    if (command.fade !== undefined && !(command.fade >= 0 && command.fade <= 5))
+      throw new Error("Scene fade must be between 0 and 5 seconds.");
+    const world = (this.sceneWorld ??= new SceneWorld(
+      this.project,
+      this.scene.id,
+    ));
+    world.validate(command);
+    this.sceneQueue.push({
+      ...command,
+      offset: command.offset && { ...command.offset },
+    });
+  }
+
+  private triggerSceneSignal(id: string, source: string) {
+    const command = this.sceneWorld?.signal(id, source);
+    if (command) {
+      try {
+        this.controlScene(command);
+      } catch (error) {
+        this.log({ level: "error", message: String(error) });
+      }
+    }
+  }
+
+  private processScenes(delta: number) {
+    if (this.transition) {
+      const route = this.transition;
+      route.elapsed += delta;
+      const duration = route.command.fade!;
+      if (!route.applied && route.elapsed >= duration / 2) {
+        route.applied = true;
+        this.commitSceneCommand(route.command);
+      }
+      if (route.elapsed >= duration) this.transition = undefined;
+      return;
+    }
+    const command = this.sceneQueue.shift();
+    if (!command) return;
+    if (command.fade && command.operation !== "preload") {
+      this.transition = { command, elapsed: 0, applied: false };
+    } else this.commitSceneCommand(command);
+  }
+
+  private commitSceneCommand(command: SceneCommand) {
+    try {
+      const world = this.sceneWorld!;
+      if (world.apply(command)) {
+        this.sceneRevision++;
+        this.applyScene(
+          this.project,
+          world.compose(),
+          command.operation === "reload" && command.sceneId === world.primary,
+        );
+      }
+    } catch (error) {
+      this.log({ level: "error", message: String(error) });
+    }
+  }
+
+  private applyScene(project: Project, scene: Scene, resetUi = false) {
     const previous = this.project;
     const oldScene = this.scene;
-    const scene = project.scenes.find(({ id }) => id === oldScene.id);
-    if (project.id !== previous.id || !scene) return false;
+    const sceneChanged = oldScene.id !== scene.id;
+    const residencyChanged = this.previousSceneRevision !== this.sceneRevision;
+    this.previousSceneRevision = this.sceneRevision;
     this.project = project;
     this.scene = scene;
     const assetsChanged = previous.assets !== project.assets;
@@ -451,8 +558,13 @@ export class Game {
     if (dataChanged) this.data.reload(project.data);
     if (previous.mixer !== project.mixer)
       this.soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
-    if (oldScene.ui !== scene.ui) this.ui = this.createUi(scene, this.ui);
+    if (oldScene.ui !== scene.ui || sceneChanged || resetUi)
+      this.ui = this.createUi(
+        scene,
+        sceneChanged || resetUi ? undefined : this.ui,
+      );
     if (
+      sceneChanged ||
       oldScene.camera !== scene.camera ||
       previous.width !== project.width ||
       previous.height !== project.height
@@ -467,7 +579,9 @@ export class Game {
       );
     }
     let rebuildWorld =
-      oldScene.tilemap !== scene.tilemap || oldScene.gravity !== scene.gravity;
+      residencyChanged ||
+      oldScene.tilemap !== scene.tilemap ||
+      oldScene.gravity !== scene.gravity;
     let rebuildNavigation = false;
     let rebuildParticles = false;
     let rebind = false;
@@ -610,8 +724,14 @@ export class Game {
     } else if (rebuildWorld) {
       for (const { entity } of this.entities) keepVelocity.add(entity.id);
     }
-    if (oldScene.tilemap !== scene.tilemap)
+    if (
+      residencyChanged ||
+      oldScene.tilemap !== scene.tilemap ||
+      (this.sceneWorld?.tileSources.length ?? 0) > 1
+    ) {
       this.tiles = this.createTiles(scene);
+      rebuildWorld = true;
+    }
     if (rebuildWorld || rebuildNavigation || rebuildParticles) {
       const entities = this.entities.map(({ entity }) => entity);
       if (rebuildWorld) {
@@ -649,7 +769,6 @@ export class Game {
           previous.extensions !== project.extensions,
       );
     }
-    return true;
   }
 
   private animationFor(entity: Entity) {
@@ -822,7 +941,7 @@ export class Game {
       },
       query: (query) =>
         query === "scene"
-          ? this.scene.name
+          ? (this.sceneWorld?.scopes.get(entity.id)?.name ?? this.scene.name)
           : {
               kind: "entity",
               id: query === "self" ? entity.id : (entity.parentId ?? ""),
@@ -832,7 +951,25 @@ export class Game {
         ((reference.kind === "entity" &&
           this.world.has(this.resolveReference(entity, reference.id))) ||
           (reference.kind === "asset" && this.assets.has(reference.id))),
-      emit: (id, value) => this.scheduler.emit(id, value),
+      emit: (id, value) => {
+        this.scheduler.emit(id, value);
+        this.triggerSceneSignal(
+          id,
+          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+        );
+      },
+      sceneFlow: (operation, target, route) => {
+        if (!route) this.controlScene({ operation, sceneId: target });
+        else {
+          const command = this.sceneWorld?.route(
+            target,
+            this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+          );
+          if (!command)
+            throw new Error("The project has no Scene Flow routes.");
+          this.controlScene(command);
+        }
+      },
       animate: (clip) => {
         if (entity.visual?.kind !== "sprite")
           throw new Error("Animation requires an assigned sprite.");
@@ -873,7 +1010,12 @@ export class Game {
         state.animation.parameter(command.parameterId, command.value);
         break;
       case "timeline":
-        this.motion.play(command.timelineId, command.playing);
+        this.motion.play(
+          this.sceneWorld?.scopes
+            .get(state.entity.id)
+            ?.timelines.get(command.timelineId) ?? command.timelineId,
+          command.playing,
+        );
         break;
       case "tween":
         this.motion.tween(
@@ -943,9 +1085,12 @@ export class Game {
   }
 
   private resolveReference(entity: Entity, id: string) {
-    return entity.prefab
-      ? (this.prefabMembers.get(entity.prefab.instanceId)?.get(id) ?? id)
-      : id;
+    const prefab =
+      entity.prefab &&
+      this.prefabMembers.get(entity.prefab.instanceId)?.get(id);
+    return (
+      prefab || this.sceneWorld?.scopes.get(entity.id)?.entities.get(id) || id
+    );
   }
 
   private target(entity: Entity, id?: string) {
@@ -1050,14 +1195,17 @@ export class Game {
     for (const animation of this.animations) animation.step(STEP);
     this.stepParticles(STEP);
     this.time += STEP;
+    this.processScenes(STEP);
   }
   advance(seconds: number) {
     if (!Number.isFinite(seconds) || seconds < 0) return;
     this.start();
     if (this.scheduler.paused) return;
     this.scheduler.pump();
+    const pending = this.tickPending;
     this.finishTick();
     if (this.scheduler.paused) return;
+    if (!pending) this.processScenes(0);
     this.accumulator += Math.min(seconds, 0.15);
     while (this.accumulator + 1e-10 >= STEP) {
       this.accumulator -= STEP;
@@ -1069,6 +1217,14 @@ export class Game {
         break;
       }
     }
+  }
+  getSceneEntityId(sceneId: string, entityId: string) {
+    return (
+      this.sceneWorld?.entityId(sceneId, entityId) ??
+      (sceneId === this.scene.id && this.world.has(entityId)
+        ? entityId
+        : undefined)
+    );
   }
   getEntity(id: string) {
     return this.world.get(id)?.entity;
@@ -1123,6 +1279,7 @@ export class Game {
     return new TileWorld(
       scene.tilemap,
       (layer) => this.tileOwners.get(layer)?.visible ?? true,
+      this.sceneWorld?.tileSources,
     );
   }
 
@@ -1295,51 +1452,59 @@ export class Game {
       width: width / view.zoom,
       height: height / view.zoom,
     };
-    const paint = (grid: TileGrid, alpha: number) => {
+    const paint = (
+      grid: TileGrid,
+      alpha: number,
+      world = this.tiles,
+      offset?: Point,
+    ) => {
       if (!alpha) return;
       const { size } = grid;
-      grid.forArea(area, (tile) => {
-        const terrain = this.tiles.terrain(tile);
-        const x = tile.x * size,
-          y = tile.y * size;
-        const base = {
-          width: size,
-          height: size,
-          alpha,
-          matrix: multiply(cameraMatrix, translation(x, y)),
-        };
-        const mask = terrain ? grid.mask(tile) : 0;
-        if (terrain?.atlas) {
+      grid.forArea(
+        offset ? { ...area, x: area.x - offset.x, y: area.y - offset.y } : area,
+        (tile) => {
+          const terrain = world.terrain(tile);
+          const x = tile.x * size + (offset?.x ?? 0),
+            y = tile.y * size + (offset?.y ?? 0);
+          const base = {
+            width: size,
+            height: size,
+            alpha,
+            matrix: multiply(cameraMatrix, translation(x, y)),
+          };
+          const mask = terrain ? grid.mask(tile) : 0;
+          if (terrain?.atlas) {
+            draws.push({
+              ...base,
+              kind: "sprite",
+              assetId: terrain.atlas.assetId,
+              frame: autotileFrame(terrain.atlas, mask),
+            });
+            return;
+          }
           draws.push({
             ...base,
-            kind: "sprite",
-            assetId: terrain.atlas.assetId,
-            frame: autotileFrame(terrain.atlas, mask),
-          });
-          return;
-        }
-        draws.push({
-          ...base,
-          kind: "rect",
-          color: terrain?.color ?? tile.color,
-        });
-        if (!terrain || alpha < 1) return;
-        const border = Math.max(1, Math.floor(size / 8));
-        const edge = (dx: number, dy: number, w: number, h: number) =>
-          draws.push({
             kind: "rect",
-            alpha,
-            color: terrain.edge,
-            width: w,
-            height: h,
-            matrix: multiply(cameraMatrix, translation(x + dx, y + dy)),
+            color: terrain?.color ?? tile.color,
           });
-        if (!(mask & NORTH)) edge(0, 0, size, border);
-        if (!(mask & EAST))
-          edge(size - border, border, border, size - 2 * border);
-        if (!(mask & SOUTH)) edge(0, size - border, size, border);
-        if (!(mask & WEST)) edge(0, border, border, size - 2 * border);
-      });
+          if (!terrain || alpha < 1) return;
+          const border = Math.max(1, Math.floor(size / 8));
+          const edge = (dx: number, dy: number, w: number, h: number) =>
+            draws.push({
+              kind: "rect",
+              alpha,
+              color: terrain.edge,
+              width: w,
+              height: h,
+              matrix: multiply(cameraMatrix, translation(x + dx, y + dy)),
+            });
+          if (!(mask & NORTH)) edge(0, 0, size, border);
+          if (!(mask & EAST))
+            edge(size - border, border, border, size - 2 * border);
+          if (!(mask & SOUTH)) edge(0, size - border, size, border);
+          if (!(mask & WEST)) edge(0, border, border, size - 2 * border);
+        },
+      );
     };
     const particlesByLayer = this.particles.hasEmitters
       ? new Map<string, Draw[]>()
@@ -1373,21 +1538,28 @@ export class Game {
       renderedLayer = undefined;
     };
     let layerIndex = 0;
+    const paintWorld = (world: TileWorld, offset?: Point, firstLayer = 0) => {
+      if (layerIndex === firstLayer + 1) paint(world.legacy, 1, world, offset);
+      const layer = this.scene.layers[layerIndex];
+      if (!layer?.visible) return;
+      renderedLayer = layer.id;
+      for (const { definition, grid } of world.layers) {
+        if (
+          definition.visible &&
+          definition.layerId === layer.id &&
+          (this.tileOwners.get(definition.id)?.visible ?? true)
+        )
+          paint(grid, definition.opacity, world, offset);
+      }
+    };
     const paintLayers = (through: number) => {
       for (; layerIndex <= through; layerIndex++) {
         flushParticles();
-        if (layerIndex === 1) paint(this.tiles.legacy, 1);
-        const layer = this.scene.layers[layerIndex];
-        if (!layer?.visible) continue;
-        renderedLayer = layer.id;
-        for (const { definition, grid } of this.tiles.layers) {
-          if (
-            definition.visible &&
-            definition.layerId === layer.id &&
-            (this.tileOwners.get(definition.id)?.visible ?? true)
-          )
-            paint(grid, definition.opacity);
-        }
+        if (this.tiles.parts.length) {
+          for (const { world, offset, layerIndex: firstLayer } of this.tiles
+            .parts)
+            paintWorld(world, offset, firstLayer);
+        } else paintWorld(this.tiles);
       }
     };
     const candidates = this.renderIndex.query(area, this.renderCandidates);
@@ -1423,7 +1595,12 @@ export class Game {
         });
       else draws.push({ ...base, ...visual });
     }
-    paintLayers(Math.max(1, this.scene.layers.length - 1));
+    paintLayers(
+      Math.max(
+        (this.tiles.parts.at(-1)?.layerIndex ?? 0) + 1,
+        this.scene.layers.length - 1,
+      ),
+    );
     flushParticles();
     const config = this.scene.lighting;
     const lighting: LightingPass | undefined = config?.enabled
@@ -1456,6 +1633,20 @@ export class Game {
       }
     }
     draws.push(...hud);
+    const fade = this.transition;
+    if (fade) {
+      const ratio = fade.elapsed / fade.command.fade!;
+      const alpha = Math.max(0, 1 - Math.abs(2 * ratio - 1));
+      if (alpha)
+        draws.push({
+          kind: "rect",
+          width,
+          height,
+          color: "#000000",
+          alpha,
+          matrix: translation(0, 0),
+        });
+    }
     return {
       width,
       height,

@@ -18,6 +18,8 @@ import {
 } from "./effects";
 import { catalogSchema, validateCatalog } from "./data";
 import { uiSchema, validateUi } from "./ui";
+import { sceneFlowSchema } from "./scene-flow";
+export * from "./scene-flow";
 export * from "./ui";
 export * from "./effects";
 export * from "./entity-components";
@@ -283,6 +285,7 @@ const projectSchema = z.object({
   width: dimension,
   height: dimension,
   startSceneId: id,
+  sceneFlow: sceneFlowSchema.optional(),
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
@@ -435,6 +438,33 @@ export function validateProject(input: unknown): Project {
       if (sound.bus !== MASTER_BUS && !buses.has(sound.bus))
         throw new Error(`Sound "${sound.name}" has a missing audio bus.`);
     }
+  }
+  if (project.sceneFlow) {
+    idsOf(project.sceneFlow.routes, "scene route");
+    const triggers = new Map<string, Set<string | null>>();
+    for (const route of project.sceneFlow.routes) {
+      if ((route.from && !sceneIds.has(route.from)) || !sceneIds.has(route.to))
+        throw new Error(
+          `Scene route "${route.name}" references a missing scene.`,
+        );
+      if (route.signalId) {
+        if (!project.signals?.some((signal) => signal.id === route.signalId))
+          throw new Error(
+            `Scene route "${route.name}" references a missing signal.`,
+          );
+        const sources =
+          triggers.get(route.signalId) ?? new Set<string | null>();
+        if (sources.has(route.from))
+          throw new Error(
+            `Scene route "${route.name}" duplicates a signal trigger.`,
+          );
+        sources.add(route.from);
+        triggers.set(route.signalId, sources);
+      }
+    }
+    for (const sceneId of Object.keys(project.sceneFlow.positions ?? {}))
+      if (!sceneIds.has(sceneId))
+        throw new Error("Scene Flow contains a missing scene position.");
   }
   if (!sceneIds.has(project.startSceneId))
     throw new Error("The starting scene is missing.");
@@ -653,6 +683,7 @@ export function serializeProject(project: Project): string {
           ),
       ),
     ) ||
+    !!project.sceneFlow ||
     project.blueprints.some(
       ({ requires, variables }) =>
         !!requires?.length || variables.some(({ exposed }) => exposed),

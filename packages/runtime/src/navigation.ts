@@ -63,7 +63,7 @@ export class NavigationGrid {
     const key = width + "," + height;
     const cached = this.grids.get(key);
     if (cached) return cached;
-    const { width: cols, height: rows, size } = this.tiles.map;
+    const { width: cols, height: rows, size } = this.tiles.navigationMap;
     const costs = new Float32Array(cols * rows);
     const cover = new Uint8Array(cols * rows);
     for (const rect of this.statics) {
@@ -108,7 +108,7 @@ export class NavigationGrid {
         )
           continue;
         let blocked = false;
-        if (width > size || height > size)
+        if (this.tiles.parts.length || width > size || height > size)
           this.tiles.solids(actor, (solid) => {
             if (overlaps(actor, solid)) blocked = true;
           });
@@ -120,7 +120,7 @@ export class NavigationGrid {
     return costs;
   }
   cell(point: Point) {
-    const { width, height, size } = this.tiles.map;
+    const { width, height, size } = this.tiles.navigationMap;
     const x = Math.floor(point.x / size),
       y = Math.floor(point.y / size);
     return x < 0 || y < 0 || x >= width || y >= height ? -1 : y * width + x;
@@ -130,7 +130,7 @@ export class NavigationGrid {
     to: Point,
     body?: { width: number; height: number },
   ): Point[] {
-    const { width, height, size } = this.tiles.map;
+    const { width, height, size } = this.tiles.navigationMap;
     const start = this.cell(from),
       goal = this.cell(to);
     if (start < 0 || goal < 0) return [];

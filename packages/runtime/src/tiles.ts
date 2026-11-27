@@ -129,13 +129,22 @@ export function autotileFrame(
   };
 }
 
+export type TileSource = {
+  map: Scene["tilemap"];
+  offset: Point;
+  layerIndex: number;
+};
+type TilePart = { world: TileWorld; offset: Point; layerIndex: number };
 export class TileWorld {
+  readonly parts: TilePart[];
+  readonly navigationMap: Pick<Scene["tilemap"], "width" | "height" | "size">;
   readonly legacy: TileGrid;
   readonly layers: { definition: TileLayer; grid: TileGrid }[];
   private terrains: Map<string, Terrain>;
   constructor(
     readonly map: Scene["tilemap"],
     private enabled: (layerId: string) => boolean = () => true,
+    sources: TileSource[] = [],
   ) {
     const grid = (tiles: Tile[]) =>
       new TileGrid(map.width, map.height, map.size, tiles);
@@ -144,6 +153,30 @@ export class TileWorld {
       definition,
       grid: grid(definition.tiles),
     }));
+    this.parts = sources.map(({ map, offset, layerIndex }) => ({
+      world: new TileWorld(map, enabled),
+      offset,
+      layerIndex,
+    }));
+    const width = Math.max(
+      map.width,
+      ...sources.map((source) =>
+        Math.ceil(
+          (source.offset.x + source.map.width * source.map.size) / map.size,
+        ),
+      ),
+    );
+    const height = Math.max(
+      map.height,
+      ...sources.map((source) =>
+        Math.ceil(
+          (source.offset.y + source.map.height * source.map.size) / map.size,
+        ),
+      ),
+    );
+    // Navigation keeps a bounded dense grid. Rendering and collision retain independent sparse grids.
+    this.navigationMap =
+      width * height <= 1048576 ? { width, height, size: map.size } : map;
     this.terrains = new Map(
       (map.terrains ?? []).map((terrain) => [terrain.id, terrain]),
     );
@@ -158,6 +191,15 @@ export class TileWorld {
     return tile.cost ?? this.terrain(tile)?.cost ?? 1;
   }
   solids(area: Rect, visit: (rect: Rect) => void) {
+    if (this.parts.length) {
+      for (const { world, offset } of this.parts)
+        world.solids(
+          { ...area, x: area.x - offset.x, y: area.y - offset.y },
+          (rect) =>
+            visit({ ...rect, x: rect.x + offset.x, y: rect.y + offset.y }),
+        );
+      return;
+    }
     const { size } = this.map;
     const use = (tile: Tile) => {
       if (this.solid(tile))
@@ -174,6 +216,20 @@ export class TileWorld {
         grid.forArea(area, use);
   }
   navigationCost(x: number, y: number) {
+    if (this.parts.length) {
+      const wx = (x + 0.5) * this.map.size;
+      const wy = (y + 0.5) * this.map.size;
+      let cost = 1;
+      for (const { world, offset } of this.parts) {
+        const weight = world.navigationCost(
+          Math.floor((wx - offset.x) / world.map.size),
+          Math.floor((wy - offset.y) / world.map.size),
+        );
+        if (!weight) return 0;
+        cost = Math.max(cost, weight);
+      }
+      return cost;
+    }
     let cost = 1;
     const base = this.legacy.at(x, y);
     if (base) {

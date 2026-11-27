@@ -54,6 +54,7 @@ import {
   type EffectCommand,
   dataSourceSchema,
   uiPropertySchema,
+  sceneOperationSchema,
   type DataSource,
   type Binary,
   type Block,
@@ -213,6 +214,13 @@ const kinds = {
     description: "Change the active language for translation lookups.",
     tone: "blue",
     Icon: Globe,
+  },
+  sceneFlow: {
+    name: "Control Scene",
+    description:
+      "Change, add, unload, reload, or preload a scene or follow a Scene Flow route.",
+    tone: "purple",
+    Icon: GitBranch,
   },
   ui: {
     name: "Set UI Widget",
@@ -446,6 +454,14 @@ function makeBlock(
       return { id, kind, slotId: "unassigned", operation: "save" };
     case "language":
       return { id, kind, locale: "" };
+    case "sceneFlow":
+      return {
+        id,
+        kind,
+        operation: "change",
+        target: literal(""),
+        route: false,
+      };
     case "ui":
       return {
         id,
@@ -2217,6 +2233,58 @@ function UiBlockFields({
   );
 }
 
+function SceneBlockFields({
+  block,
+  replace,
+  expression,
+}: {
+  block: Extract<Block, { kind: "sceneFlow" }>;
+  replace: (block: Block) => void;
+  expression: RenderExpression;
+}) {
+  const targets = useEditor((state) =>
+    block.route ? state.project.sceneFlow?.routes : state.project.scenes,
+  );
+  const current =
+    block.target.kind === "literal" ? String(block.target.value) : "";
+  return (
+    <>
+      <EffectChoice
+        label="Source"
+        value={block.route ? "route" : "scene"}
+        options={[
+          { id: "scene", name: "Scene ID" },
+          { id: "route", name: "Scene Flow route" },
+        ]}
+        change={(id) =>
+          replace({ ...block, route: id === "route", target: literal("") })
+        }
+      />
+      {!block.route && (
+        <EffectChoice
+          label="Operation"
+          value={block.operation}
+          options={sceneOperationSchema.options.map((id) => ({ id, name: id }))}
+          change={(id) =>
+            replace({ ...block, operation: sceneOperationSchema.parse(id) })
+          }
+        />
+      )}
+      <EffectChoice
+        label="Choose target"
+        value={current}
+        options={targets ?? []}
+        change={(id) => replace({ ...block, target: literal(id) })}
+      />
+      {expression(
+        "Target ID",
+        block.target,
+        (target) => replace({ ...block, target }),
+        "string",
+      )}
+    </>
+  );
+}
 function AdvancedFields({
   block,
   blueprint,
@@ -2235,6 +2303,14 @@ function AdvancedFields({
   replace: (block: Block) => void;
 }) {
   switch (block.kind) {
+    case "sceneFlow":
+      return (
+        <SceneBlockFields
+          block={block}
+          expression={expression}
+          replace={replace}
+        />
+      );
     case "ui":
       return (
         <UiBlockFields

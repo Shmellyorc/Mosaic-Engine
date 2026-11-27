@@ -218,6 +218,15 @@ export type EffectCommand =
   | { kind: "particles"; operation: "burst" | "start" | "stop" }
   | { kind: "sound"; soundId: string; playing: boolean };
 
+export const sceneOperationSchema = z.enum([
+  "change",
+  "add",
+  "unload",
+  "reload",
+  "preload",
+]);
+export type SceneOperation = z.infer<typeof sceneOperationSchema>;
+
 export const uiPropertySchema = z.enum([
   "text",
   "visible",
@@ -254,6 +263,12 @@ type BlockData =
     }
   | { kind: "particles"; operation: "burst" | "start" | "stop" }
   | { kind: "sound"; soundId: string; playing: boolean }
+  | {
+      kind: "sceneFlow";
+      operation: SceneOperation;
+      target: Expression;
+      route: boolean;
+    }
   | { kind: "writeGlobal"; globalId: string; value: Expression }
   | { kind: "saveSlot"; slotId: string; operation: "save" | "load" }
   | { kind: "language"; locale: string }
@@ -370,6 +385,13 @@ const blockSchema: z.ZodType<Block> = z.lazy(() =>
       operation: z.enum(["save", "load"]),
     }),
     z.object({ id, kind: z.literal("language"), locale: text }),
+    z.object({
+      id,
+      kind: z.literal("sceneFlow"),
+      operation: sceneOperationSchema,
+      target: expressionSchema,
+      route: z.boolean(),
+    }),
     z.object({
       id,
       kind: z.literal("ui"),

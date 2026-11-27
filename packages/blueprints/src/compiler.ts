@@ -19,6 +19,7 @@ import {
   type Value,
   type ValueType,
   type UiProperty,
+  type SceneOperation,
 } from "./model";
 
 const MAX_ITERATIONS = 1024;
@@ -40,6 +41,7 @@ export type BlueprintContext = {
     language(locale: string): void;
   };
   effect?(command: EffectCommand): void;
+  sceneFlow?(operation: SceneOperation, target: string, route: boolean): void;
   ui?(id: string, property: UiProperty, value?: Value): void;
   log(blockId: string, value: Value): void;
   fault(diagnostic: Diagnostic): void;
@@ -751,6 +753,18 @@ export function compileBlueprint(
             return fault("This runtime does not provide localization.");
           ctx.data.language(block.locale);
         };
+      case "sceneFlow": {
+        const target = read(block.target, "string");
+        return function* (ctx, locals) {
+          if (!ctx.sceneFlow)
+            return fault("This runtime does not provide Scene Flow.");
+          ctx.sceneFlow(
+            block.operation,
+            String(target(ctx, locals)),
+            block.route,
+          );
+        };
+      }
       case "ui": {
         if (block.widgetId === "unassigned") error("Choose a UI widget.");
         const type =

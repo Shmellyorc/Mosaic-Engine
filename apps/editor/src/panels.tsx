@@ -1,4 +1,4 @@
-import { documentKey, type DocumentRef } from "./documents";
+import { documentKey, sceneFlowDocument, type DocumentRef } from "./documents";
 import { auditAssets } from "./asset-audit";
 import {
   Box,
@@ -179,6 +179,8 @@ export function ProjectPanel() {
             <Plus size={15} />
           </button>
         </summary>
+        {matches("Project.sceneflow") &&
+          row("Project.sceneflow", sceneFlowDocument, Layers3)}
         {project.scenes
           .filter((item) => matches(item.name))
           .map((item) => (
@@ -613,6 +615,18 @@ function EntityInspector() {
             onChange={(order) =>
               editEntity((draft) => {
                 draft.order = order;
+              })
+            }
+          />
+        </Field>
+        <Field label="Persistent tree">
+          <input
+            aria-label="Keep entity tree between scenes"
+            type="checkbox"
+            checked={!!entity.persistent}
+            onChange={(event) =>
+              editEntity((draft) => {
+                draft.persistent = event.target.checked || undefined;
               })
             }
           />
