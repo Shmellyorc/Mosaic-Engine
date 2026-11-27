@@ -26,7 +26,7 @@ const enumValue = z.object({
   enumId: text,
   key: text,
 });
-const scalar = z.union([
+export const scalarSchema = z.union([
   z.number(),
   z.boolean(),
   text,
@@ -38,11 +38,12 @@ const scalar = z.union([
 const record = z.object({
   kind: z.literal("record"),
   schema: text,
-  fields: z.record(id, scalar),
+  fields: z.record(id, scalarSchema),
 });
-const value = z.union([scalar, record]);
+export const blueprintValueSchema = z.union([scalarSchema, record]);
+const value = blueprintValueSchema;
 export type Value = z.infer<typeof value>;
-export type Scalar = z.infer<typeof scalar>;
+export type Scalar = z.infer<typeof scalarSchema>;
 export const propertySchema = z.enum([
   "x",
   "y",
@@ -76,6 +77,26 @@ export const binaryOperators = z.enum([
   "or",
 ]);
 export type Binary = z.infer<typeof binaryOperators>;
+export const dataSourceSchema = z.enum([
+  "global",
+  "sheet",
+  "resource",
+  "translation",
+  "locale",
+  "slot",
+]);
+export type DataSource = z.infer<typeof dataSourceSchema>;
+export interface DataSymbols {
+  readType(source: DataSource, id: string): ValueType | undefined;
+  writeType(id: string): ValueType | undefined;
+  fields(
+    source: DataSource,
+    id: string,
+  ): ReadonlyMap<string, ValueType> | undefined;
+  hasSlot(id: string): boolean;
+  hasLocale(id: string): boolean;
+}
+
 export type Expression =
   | { kind: "literal"; value: Value }
   | { kind: "variable" | "input"; id: string }
@@ -87,6 +108,7 @@ export type Expression =
     }
   | { kind: "property"; property: Property; target?: Expression }
   | { kind: "exists"; reference: Expression }
+  | { kind: "toText"; value: Expression }
   | { kind: "vector"; x: Expression; y: Expression }
   | { kind: "component"; vector: Expression; axis: "x" | "y" }
   | {
@@ -95,7 +117,14 @@ export type Expression =
       key: string;
       type: Exclude<ValueType, "record">;
     }
-  | { kind: "query"; query: "self" | "parent" | "scene" };
+  | { kind: "query"; query: "self" | "parent" | "scene" }
+  | {
+      kind: "data";
+      source: DataSource;
+      id: string;
+      type: ValueType;
+      key?: Expression;
+    };
 export const expressionSchema: z.ZodType<Expression> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("literal"), value }),
@@ -118,6 +147,7 @@ export const expressionSchema: z.ZodType<Expression> = z.lazy(() =>
       target: expressionSchema.optional(),
     }),
     z.object({ kind: z.literal("exists"), reference: expressionSchema }),
+    z.object({ kind: z.literal("toText"), value: expressionSchema }),
     z.object({
       kind: z.literal("vector"),
       x: expressionSchema,
@@ -133,6 +163,13 @@ export const expressionSchema: z.ZodType<Expression> = z.lazy(() =>
       record: expressionSchema,
       key: text,
       type: valueType.exclude(["record"]),
+    }),
+    z.object({
+      kind: z.literal("data"),
+      source: dataSourceSchema,
+      id: text,
+      type: valueType,
+      key: expressionSchema.optional(),
     }),
     z.object({
       kind: z.literal("query"),
@@ -190,6 +227,9 @@ type BlockData =
     }
   | { kind: "particles"; operation: "burst" | "start" | "stop" }
   | { kind: "sound"; soundId: string; playing: boolean }
+  | { kind: "writeGlobal"; globalId: string; value: Expression }
+  | { kind: "saveSlot"; slotId: string; operation: "save" | "load" }
+  | { kind: "language"; locale: string }
   | { kind: "log"; value: Expression }
   | {
       kind: "call";
@@ -283,6 +323,19 @@ const blockSchema: z.ZodType<Block> = z.lazy(() =>
       soundId: id,
       playing: z.boolean(),
     }),
+    z.object({
+      id,
+      kind: z.literal("writeGlobal"),
+      globalId: id,
+      value: expressionSchema,
+    }),
+    z.object({
+      id,
+      kind: z.literal("saveSlot"),
+      slotId: id,
+      operation: z.enum(["save", "load"]),
+    }),
+    z.object({ id, kind: z.literal("language"), locale: text }),
     z.object({ id, kind: z.literal("log"), value: expressionSchema }),
     z.object({
       id,

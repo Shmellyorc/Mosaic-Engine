@@ -49,6 +49,11 @@ jobs:
           path: dist/lantern-signal-lab.html
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ridge-trading-post-web
+          path: dist/ridge-trading-post.html
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: smoke-test-results

@@ -6,6 +6,8 @@ import {
   MASTER_BUS,
   createMixer,
   inspectWav,
+  createCatalog,
+  indexCatalog,
   newId,
   parseProject,
   serializeProject,
@@ -236,6 +238,7 @@ export async function importSound() {
 }
 export async function exportGame() {
   const project = useEditor.getState().project;
+  const data = indexCatalog(project.data ?? createCatalog());
   const axes = new Set(project.input.map((axis) => axis.id));
   const assigned = new Set(
     project.scenes.flatMap((scene) =>
@@ -248,6 +251,7 @@ export async function exportGame() {
       blueprint,
       axes,
       project.signals,
+      data,
     ).diagnostics;
     if (diagnostic)
       throw new Error(

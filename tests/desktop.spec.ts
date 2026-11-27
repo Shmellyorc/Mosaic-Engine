@@ -105,6 +105,15 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
           .evaluate((meter: HTMLMeterElement) => meter.value),
       )
       .toBeGreaterThan(0.02);
+    await workspaces.getByRole("button", { name: "Data", exact: true }).click();
+    const dataTools = page.getByRole("navigation", { name: "Data tools" });
+    await dataTools
+      .getByRole("button", { name: "Globals", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Add Global", exact: true }).click();
+    await page.getByLabel("Global name", { exact: true }).fill("Native Score");
+    await page.getByLabel("Global name", { exact: true }).press("Enter");
+    await page.getByLabel("Save global", { exact: true }).check();
     await workspaces
       .getByRole("button", { name: "Scene", exact: true })
       .click();
@@ -154,6 +163,10 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     expect(saved.name).toBe("Native Trail");
     expect(saved.assets).toHaveLength(1);
     expect(saved.mixer?.sounds[0].name).toBe("native-tone.wav");
+    expect(saved.data?.globals[0]).toMatchObject({
+      name: "Native Score",
+      saved: true,
+    });
     const entity = saved.scenes[0].entities[0];
     expect(entity.name).toBe("Lantern");
     expect(entity.visual).toEqual({
@@ -173,6 +186,13 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       page.getByText("Project opened.", { exact: true }),
     ).toBeVisible();
     await expect(page.getByLabel("Entity name")).toHaveValue("Lantern");
+    await workspaces.getByRole("button", { name: "Data", exact: true }).click();
+    await dataTools
+      .getByRole("button", { name: "Globals", exact: true })
+      .click();
+    await expect(page.getByLabel("Global name", { exact: true })).toHaveValue(
+      "Native Score",
+    );
     await page.getByRole("button", { name: "Export", exact: true }).click();
     await expect(
       page.getByText("Standalone game exported.", { exact: true }),

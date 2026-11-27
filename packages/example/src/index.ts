@@ -1,4 +1,11 @@
 import {
+  marketBlueprint,
+  marketData,
+  marketInputs,
+  TRADING_POST_ID,
+  tradingPostScene,
+} from "./trading-post";
+import {
   SIGNAL_LAB_ID,
   labSignal,
   signalBlueprints,
@@ -142,11 +149,13 @@ export function exampleProject(): Project {
       labSignal,
     ],
     mixer: signalMixer(),
+    data: marketData(),
     assets: [
       { id: "ridge-art", name: "Ridge panorama", source: landscape },
       { id: "keeper-art", name: "Lantern spritesheet", source: sheet },
     ],
     input: [
+      ...marketInputs,
       {
         id: "signal-pulse",
         name: "Signal Pulse",
@@ -182,6 +191,7 @@ export function exampleProject(): Project {
       },
       workshopScene(player),
       signalLabScene(player),
+      tradingPostScene(player),
     ],
     blueprints: [
       {
@@ -288,6 +298,7 @@ export function exampleProject(): Project {
       },
       ...workshopBlueprints,
       ...signalBlueprints,
+      marketBlueprint,
     ],
   };
 }
@@ -305,5 +316,13 @@ export function signalLabProject(): Project {
     ...exampleProject(),
     name: "Lantern Signal Lab",
     startSceneId: SIGNAL_LAB_ID,
+  };
+}
+
+export function tradingPostProject(): Project {
+  return {
+    ...exampleProject(),
+    name: "Ridge Trading Post",
+    startSceneId: TRADING_POST_ID,
   };
 }

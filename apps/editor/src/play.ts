@@ -1,4 +1,4 @@
-import { AudioMixer, Game } from "@mosaic/runtime";
+import { AudioMixer, browserSlotStorage, Game } from "@mosaic/runtime";
 import { emptySignals, type Project } from "@mosaic/model";
 import { selectedScene, useEditor } from "./state";
 
@@ -65,6 +65,7 @@ export function stepBlueprint() {
   publishSnapshot(game, useEditor.getState().entityId);
 }
 export function startTransport() {
+  const slots = browserSlotStorage("preview");
   let runId = -1;
   let last = performance.now();
   let debugAt = 0;
@@ -106,7 +107,7 @@ export function startTransport() {
       if (!game || runId !== state.runId) {
         runId = state.runId;
         document = state.project;
-        game = new Game(state.project, selectedScene(state).id, true);
+        game = new Game(state.project, selectedScene(state).id, true, slots);
         updateBreakpoints(game, state.breakpoints);
         game.start();
         debugAt = 0;

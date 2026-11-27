@@ -19,6 +19,9 @@ import {
   Radio,
   ArrowUpRight,
   AudioLines,
+  Database,
+  Globe,
+  Save,
   Sparkles,
 } from "lucide-react";
 import {
@@ -47,6 +50,8 @@ import {
   easingSchema,
   motionPropertySchema,
   type EffectCommand,
+  dataSourceSchema,
+  type DataSource,
   type Binary,
   type Block,
   type Blueprint,
@@ -57,6 +62,8 @@ import {
 import {
   createBlueprint,
   emptySignals,
+  indexCatalog,
+  type Catalog,
   newId,
   type Project,
 } from "@mosaic/model";
@@ -68,7 +75,8 @@ import {
   useEditor,
 } from "./state";
 import { Field, Section, TextField } from "./controls";
-import { TypeOptions, ValueControl } from "./blueprint-values";
+import { enumLabel, TypeOptions, ValueControl } from "./blueprint-values";
+import { emptyCatalog } from "./data-controls";
 
 const kinds = {
   set: {
@@ -179,6 +187,25 @@ const kinds = {
     description: "Play or stop an imported sound through its mixer bus.",
     tone: "purple",
     Icon: AudioLines,
+  },
+  writeGlobal: {
+    name: "Write Global",
+    description: "Update a writable project global using a typed value.",
+    tone: "blue",
+    Icon: Database,
+  },
+  saveSlot: {
+    name: "Save or Load Game",
+    description:
+      "Write progress to a named save slot or load it into the game.",
+    tone: "purple",
+    Icon: Save,
+  },
+  language: {
+    name: "Set Language",
+    description: "Change the active language for translation lookups.",
+    tone: "blue",
+    Icon: Globe,
   },
   property: {
     name: "Set Property",
@@ -399,6 +426,12 @@ function makeBlock(
       return { id, kind, operation: "burst" };
     case "sound":
       return { id, kind, soundId: "unassigned", playing: true };
+    case "writeGlobal":
+      return { id, kind, globalId: "unassigned", value: literal(0) };
+    case "saveSlot":
+      return { id, kind, slotId: "unassigned", operation: "save" };
+    case "language":
+      return { id, kind, locale: "" };
     case "property":
       return { id, kind, property: "visible", value: literal(true) };
     case "log":
@@ -439,6 +472,88 @@ function createBehaviour() {
   });
 }
 
+const sourceNames: Record<DataSource, string> = {
+  global: "Global",
+  sheet: "Sheet Row",
+  resource: "Resource",
+  translation: "Translation",
+  locale: "Active Language",
+  slot: "Slot Exists",
+};
+type DataExpression = Extract<Expression, { kind: "data" }>;
+
+function dataEntries(
+  catalog: Catalog,
+  source: DataSource,
+): readonly { id: string; name: string }[] {
+  switch (source) {
+    case "global":
+      return catalog.globals;
+    case "sheet":
+      return catalog.sheets;
+    case "resource":
+      return catalog.resources;
+    case "translation":
+      return catalog.localization.entries.map(({ id, key }) => ({
+        id,
+        name: key,
+      }));
+    case "locale":
+      return [];
+    case "slot":
+      return catalog.saves.slots;
+  }
+}
+
+function initialData(
+  catalog: Catalog,
+  source: DataSource,
+  selected?: string,
+  expected?: ValueType,
+): DataExpression {
+  const index = indexCatalog(catalog);
+  const entries = dataEntries(catalog, source);
+  const id =
+    selected ??
+    entries.find(({ id }) => index.readType(source, id) === expected)?.id ??
+    entries[0]?.id ??
+    "";
+  return {
+    kind: "data",
+    source,
+    id,
+    type:
+      index.readType(source, id) ??
+      (source === "sheet" || source === "resource"
+        ? "record"
+        : (expected ?? "number")),
+    ...(source === "sheet"
+      ? { key: literal(index.sheets.get(id)?.rows[0]?.key ?? "") }
+      : {}),
+  };
+}
+
+function recordFields(catalog: Catalog, node: Expression) {
+  let schema: string | undefined;
+  if (node.kind === "data") {
+    const index = indexCatalog(catalog);
+    if (node.source === "sheet") schema = index.sheets.get(node.id)?.structId;
+    if (node.source === "resource")
+      schema = index.resources.get(node.id)?.structId;
+    if (node.source === "global") {
+      const initial = index.globals.get(node.id)?.initial;
+      if (typeof initial === "object" && initial.kind === "record")
+        schema = initial.schema;
+    }
+  } else if (
+    node.kind === "literal" &&
+    typeof node.value === "object" &&
+    node.value.kind === "record"
+  )
+    schema = node.value.schema;
+  return catalog.structs.find(({ id }) => id === schema)?.fields;
+}
+
 type ExprProps = {
   expr: Expression;
   label: string;
@@ -456,6 +571,7 @@ function ExpressionControl({
   change,
 }: ExprProps) {
   const [editing, setEditing] = useState(false);
+  const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
   const summary = (expression: Expression): ReactNode => {
     switch (expression.kind) {
       case "literal":
@@ -463,7 +579,10 @@ function ExpressionControl({
           <span className="value-chip">
             {typeof expression.value === "string"
               ? `"${expression.value}"`
-              : displayValue(expression.value)}
+              : typeof expression.value === "object" &&
+                  expression.value.kind === "enum"
+                ? enumLabel(catalog, expression.value)
+                : displayValue(expression.value)}
           </span>
         );
       case "variable":
@@ -493,6 +612,25 @@ function ExpressionControl({
         );
       case "query":
         return <span>{expression.query}</span>;
+      case "toText":
+        return <span>Text({summary(expression.value)})</span>;
+      case "data": {
+        const entry = dataEntries(catalog, expression.source).find(
+          ({ id }) => id === expression.id,
+        );
+        return (
+          <span>
+            {sourceNames[expression.source]}
+            {expression.source !== "locale" && (
+              <>
+                {" "}
+                <b className="string-value">{entry?.name ?? "Choose…"}</b>
+              </>
+            )}
+            {expression.key && <> [{summary(expression.key)}]</>}
+          </span>
+        );
+      }
       case "property":
         return (
           <span>
@@ -517,7 +655,11 @@ function ExpressionControl({
       case "field":
         return (
           <span>
-            {summary(expression.record)}.{expression.key || "field"}
+            {summary(expression.record)}.
+            {recordFields(catalog, expression.record)?.find(
+              ({ id }) => id === expression.key,
+            )?.name ??
+              (expression.key || "field")}
           </span>
         );
       case "binary":
@@ -561,6 +703,16 @@ function ExpressionControl({
           value: literal(expected === "boolean" ? false : 0),
         });
         break;
+      case "data": {
+        const source =
+          expected === "record" && catalog.sheets.length
+            ? "sheet"
+            : expected === "string" && catalog.localization.entries.length
+              ? "translation"
+              : "global";
+        change(initialData(catalog, source, undefined, expected));
+        break;
+      }
       case "query":
         change({ kind, query: expected === "string" ? "scene" : "self" });
         break;
@@ -574,6 +726,9 @@ function ExpressionControl({
                 ? "text"
                 : "x",
         });
+        break;
+      case "toText":
+        change({ kind, value: literal(0) });
         break;
       case "exists":
         change({ kind, reference: { kind: "query", query: "self" } });
@@ -640,9 +795,11 @@ function ExpressionControl({
               <option value="query">Scene query</option>
               <option value="property">Read property</option>
               <option value="exists">Reference exists</option>
+              <option value="toText">To text</option>
               <option value="vector">Make vector</option>
               <option value="component">Vector component</option>
               <option value="field">Record field</option>
+              <option value="data">Project data</option>
             </select>
           </Field>
           <ExpressionEntry
@@ -822,35 +979,105 @@ function ExpressionControl({
               )}
             </>
           )}
+          {expr.kind === "toText" &&
+            nested("Value", expr.value, (value) => change({ ...expr, value }))}
+          {expr.kind === "data" && (
+            <>
+              <Field label="Data source">
+                <select
+                  aria-label={label + " data source"}
+                  value={expr.source}
+                  onChange={(event) =>
+                    change(
+                      initialData(
+                        catalog,
+                        dataSourceSchema.parse(event.target.value),
+                        undefined,
+                        expected,
+                      ),
+                    )
+                  }
+                >
+                  {dataSourceSchema.options.map((source) => (
+                    <option key={source} value={source}>
+                      {sourceNames[source]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {expr.source !== "locale" && (
+                <EffectChoice
+                  label={label + " data entry"}
+                  value={expr.id}
+                  options={dataEntries(catalog, expr.source)}
+                  change={(id) =>
+                    change(initialData(catalog, expr.source, id, expected))
+                  }
+                />
+              )}
+              {expr.source === "sheet" &&
+                nested(
+                  "Row Key",
+                  expr.key ?? literal(""),
+                  (key) => change({ ...expr, key }),
+                  "string",
+                )}
+            </>
+          )}
           {expr.kind === "field" && (
             <>
               {nested(
                 "Record",
                 expr.record,
-                (record) => change({ ...expr, record }),
+                (record) => {
+                  const field = recordFields(catalog, record)?.find(
+                    ({ id }) => id === expr.key,
+                  );
+                  change({
+                    ...expr,
+                    record,
+                    ...(field ? { type: field.type } : {}),
+                  });
+                },
                 "record",
               )}
-              <Field label="Field">
-                <TextField
+              {recordFields(catalog, expr.record) ? (
+                <EffectChoice
                   label={label + " record field"}
                   value={expr.key}
-                  onChange={(key) => change({ ...expr, key })}
+                  options={recordFields(catalog, expr.record)!}
+                  change={(key) => {
+                    const field = recordFields(catalog, expr.record)!.find(
+                      ({ id }) => id === key,
+                    )!;
+                    change({ ...expr, key, type: field.type });
+                  }}
                 />
-              </Field>
-              <Field label="Type">
-                <select
-                  aria-label={label + " field type"}
-                  value={expr.type}
-                  onChange={(e) =>
-                    change({
-                      ...expr,
-                      type: e.target.value as typeof expr.type,
-                    })
-                  }
-                >
-                  <TypeOptions allowRecord={false} />
-                </select>
-              </Field>
+              ) : (
+                <>
+                  <Field label="Field">
+                    <TextField
+                      label={label + " record field"}
+                      value={expr.key}
+                      onChange={(key) => change({ ...expr, key })}
+                    />
+                  </Field>
+                  <Field label="Type">
+                    <select
+                      aria-label={label + " field type"}
+                      value={expr.type}
+                      onChange={(e) =>
+                        change({
+                          ...expr,
+                          type: e.target.value as typeof expr.type,
+                        })
+                      }
+                    >
+                      <TypeOptions allowRecord={false} />
+                    </select>
+                  </Field>
+                </>
+              )}
             </>
           )}
           {expr.kind === "binary" && (
@@ -1536,7 +1763,9 @@ function EffectChoice({
       >
         {!options.some((item) => item.id === value) && (
           <option value={value} disabled>
-            {value === "unassigned" ? "Choose…" : "Unavailable (" + value + ")"}
+            {value === "unassigned" || !value
+              ? "Choose…"
+              : "Unavailable (" + value + ")"}
           </option>
         )}
         {options.map(({ id, name }) => (
@@ -1676,6 +1905,91 @@ function EffectFields({
   }
 }
 
+type DataBlock = Extract<
+  Block,
+  { kind: "writeGlobal" | "saveSlot" | "language" }
+>;
+function DataBlockFields({
+  block,
+  expression,
+  replace,
+}: {
+  block: DataBlock;
+  expression: RenderExpression;
+  replace: (block: Block) => void;
+}) {
+  const data = useEditor((state) => state.project.data) ?? emptyCatalog;
+  switch (block.kind) {
+    case "writeGlobal": {
+      const writable = data.globals.filter((item) => !item.constant);
+      const global = writable.find(({ id }) => id === block.globalId);
+      return (
+        <>
+          <EffectChoice
+            label="Writable global"
+            value={block.globalId}
+            options={writable}
+            change={(globalId) =>
+              replace({
+                ...block,
+                globalId,
+                value: literal(
+                  writable.find(({ id }) => id === globalId)!.initial,
+                ),
+              })
+            }
+          />
+          <Field label="Value">
+            {expression(
+              "Global value",
+              block.value,
+              (value) => replace({ ...block, value }),
+              global && typeOf(global.initial),
+            )}
+          </Field>
+        </>
+      );
+    }
+    case "saveSlot":
+      return (
+        <>
+          <EffectChoice
+            label="Game save slot"
+            value={block.slotId}
+            options={data.saves.slots}
+            change={(slotId) => replace({ ...block, slotId })}
+          />
+          <EffectChoice
+            label="Save slot operation"
+            value={block.operation}
+            options={[
+              { id: "save", name: "Save" },
+              { id: "load", name: "Load" },
+            ]}
+            change={(value) =>
+              replace({
+                ...block,
+                operation: value === "load" ? "load" : "save",
+              })
+            }
+          />
+        </>
+      );
+    case "language":
+      return (
+        <EffectChoice
+          label="Game language"
+          value={block.locale}
+          options={data.localization.locales.map((locale) => ({
+            id: locale,
+            name: locale,
+          }))}
+          change={(locale) => replace({ ...block, locale })}
+        />
+      );
+  }
+}
+
 function AdvancedFields({
   block,
   blueprint,
@@ -1694,6 +2008,17 @@ function AdvancedFields({
   replace: (block: Block) => void;
 }) {
   switch (block.kind) {
+    case "writeGlobal":
+    case "saveSlot":
+    case "language":
+      return (
+        <DataBlockFields
+          block={block}
+          expression={expression}
+          replace={replace}
+        />
+      );
+
     case "animationParameter":
     case "timeline":
     case "tween":
@@ -1956,6 +2281,7 @@ export function BlueprintWorkspace() {
   const list = useEditor((state) => state.project.blueprints);
   const blueprint = useEditor(selectedBlueprint);
   const axes = useEditor((state) => state.project.input);
+  const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
   const signals = useEditor((state) => state.project.signals ?? emptySignals);
   const eventId = useEditor((state) => state.eventId);
   const [scale, setScale] = useState(100);
@@ -1966,8 +2292,9 @@ export function BlueprintWorkspace() {
         blueprint,
         new Set(axes.map((axis) => axis.id)),
         signals,
+        indexCatalog(catalog),
       ),
-    [axes, blueprint, signals],
+    [axes, blueprint, signals, catalog],
   );
   const diagnostics = compiled?.diagnostics ?? [];
   const problems = new Map<string, string[]>();
@@ -2119,6 +2446,7 @@ export function BlueprintInspector() {
   const eventId = useEditor((state) => state.eventId);
   const tile = useEditor((state) => state.selectedTile);
   const axes = useEditor((state) => state.project.input);
+  const catalog = useEditor((state) => state.project.data) ?? emptyCatalog;
   const signals = useEditor((state) => state.project.signals ?? emptySignals);
   if (!blueprint)
     return (
@@ -2135,6 +2463,7 @@ export function BlueprintInspector() {
     blueprint,
     new Set(axes.map((axis) => axis.id)),
     signals,
+    indexCatalog(catalog),
   ).diagnostics;
   return (
     <div className="panel-body inspector">

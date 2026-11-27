@@ -25,6 +25,7 @@ export const workspaces = [
   "Timeline",
   "Particles",
   "Audio",
+  "Data",
   "UI",
   "Input",
 ] as const;

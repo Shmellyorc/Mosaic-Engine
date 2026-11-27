@@ -1,10 +1,12 @@
 import {
   defaultValue,
+  displayValue,
   typeOf,
   type Scalar,
   type Value,
   type ValueType,
 } from "@mosaic/blueprints";
+import type { Catalog } from "@mosaic/model";
 import { useState } from "react";
 import { Field, NumberField, TextField } from "./controls";
 import { selectedScene, useEditor } from "./state";
@@ -85,27 +87,92 @@ export function ValueControl({ label, value, change }: Props) {
   if (value.kind === "entity" || value.kind === "asset")
     return <ReferenceControl label={label} value={value} change={change} />;
   if (value.kind === "enum")
+    return <EnumControl label={label} value={value} change={change} />;
+  return <RecordControl label={label} value={value} change={change} />;
+}
+
+type EnumValue = Extract<Value, { kind: "enum" }>;
+export function enumLabel(data: Catalog, value: EnumValue) {
+  const definition = data.enums.find(({ id }) => id === value.enumId);
+  const member = definition?.members.find(({ id }) => id === value.key);
+  return definition && member
+    ? definition.name + "." + member.name
+    : displayValue(value);
+}
+function EnumControl({
+  label,
+  value,
+  change,
+}: Omit<Props, "value"> & { value: EnumValue }) {
+  const enums = useEditor((state) => state.project.data?.enums);
+  const current = enums?.find(({ id }) => id === value.enumId);
+  const pick = (id: string) => {
+    const definition = enums?.find((item) => item.id === id);
+    change(
+      definition
+        ? { kind: "enum", enumId: id, key: definition.members[0].id }
+        : { ...value, enumId: "", key: "" },
+    );
+  };
+  if (enums?.length && (current || !value.enumId))
     return (
       <div className="extended-fields">
         <Field label="Enum">
-          <TextField
-            label={label + " enum ID"}
+          <select
+            aria-label={label + " enum"}
             value={value.enumId}
-            onChange={(enumId) => change({ ...value, enumId })}
-            allowEmpty
-          />
+            onChange={(event) => pick(event.target.value)}
+          >
+            <option value="">Choose an enum</option>
+            {enums.map(({ id, name }) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
         </Field>
-        <Field label="Member">
-          <TextField
-            label={label + " enum member"}
-            value={value.key}
-            onChange={(key) => change({ ...value, key })}
-            allowEmpty
-          />
-        </Field>
+        {current && (
+          <Field label="Member">
+            <select
+              aria-label={label + " enum member"}
+              value={value.key}
+              onChange={(event) =>
+                change({ ...value, key: event.target.value })
+              }
+            >
+              {!current.members.some(({ id }) => id === value.key) && (
+                <option value={value.key}>Choose a member</option>
+              )}
+              {current.members.map(({ id, name }) => (
+                <option key={id} value={id}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
     );
-  return <RecordControl label={label} value={value} change={change} />;
+  return (
+    <div className="extended-fields">
+      <Field label="Enum">
+        <TextField
+          label={label + " enum ID"}
+          value={value.enumId}
+          onChange={(enumId) => change({ ...value, enumId })}
+          allowEmpty
+        />
+      </Field>
+      <Field label="Member">
+        <TextField
+          label={label + " enum member"}
+          value={value.key}
+          onChange={(key) => change({ ...value, key })}
+          allowEmpty
+        />
+      </Field>
+    </div>
+  );
 }
 
 function ReferenceControl({

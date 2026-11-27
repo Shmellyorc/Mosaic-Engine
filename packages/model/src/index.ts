@@ -9,7 +9,9 @@ import {
   MASTER_BUS,
   timelineSchema,
 } from "./effects";
+import { catalogSchema, validateCatalog } from "./data";
 export * from "./effects";
+export * from "./data";
 
 export { inspectWav } from "./wav";
 
@@ -241,6 +243,7 @@ const projectSchema = z.object({
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
   mixer: mixerSchema.optional(),
+  data: catalogSchema.optional(),
   signals: z.array(signalSchema).max(256).optional(),
   input: z
     .array(z.object({ id, name, negative: codes, positive: codes }))
@@ -292,6 +295,7 @@ export function validateProject(input: unknown): Project {
   const signals = new Map(
     (project.signals ?? []).map((signal) => [signal.id, signal.type]),
   );
+  if (project.data) validateCatalog(project.data);
   if (project.mixer) {
     const buses = idsOf(project.mixer.buses, "audio bus");
     idsOf(project.mixer.sounds, "sound");

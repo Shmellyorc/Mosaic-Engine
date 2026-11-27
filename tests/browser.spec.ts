@@ -984,3 +984,302 @@ test("offline Signal Lab plays the chime and renders particles through both back
   await expect.poll(sample).toBeLessThanOrEqual(3);
   await expect(page.locator("#runtime-error")).toBeEmpty();
 });
+
+test("authors and reopens typed data, then reads a sheet field through a Blueprint", async ({
+  page,
+}) => {
+  test.setTimeout(85_000);
+  await editor(page);
+  const button = (name: string) =>
+    page.getByRole("button", { name, exact: true });
+  const workspace = (name: string) =>
+    page
+      .getByRole("navigation", { name: "Engine workspaces" })
+      .getByRole("button", { name, exact: true });
+  const tool = (name: string) =>
+    page
+      .getByRole("navigation", { name: "Data tools" })
+      .getByRole("button", { name, exact: true });
+  const enter = async (label: string, text: string) => {
+    const input = page.getByLabel(label, { exact: true });
+    await input.fill(text);
+    await input.press("Enter");
+  };
+  await fileMenu(page, "New Project");
+  await page.getByLabel("Project name").fill("Station Ledger");
+  await button("Create Project").click();
+  await workspace("Data").click();
+
+  await tool("Enums").click();
+  await button("Add Enum").click();
+  await enter("Enum name", "Severity");
+  await enter("Enum member name", "Normal");
+  await button("Member").click();
+  await page
+    .getByLabel("Enum member name", { exact: true })
+    .last()
+    .fill("Priority");
+  await page
+    .getByLabel("Enum member name", { exact: true })
+    .last()
+    .press("Enter");
+
+  await tool("Structs").click();
+  await button("Add Struct").click();
+  await enter("Struct name", "Station Record");
+  await button("Field").click();
+  await enter("Field name", "Rate");
+  await button("Field").click();
+  const severity = page.getByRole("region", { name: "Field 2 field" });
+  await severity
+    .getByLabel("Field 2 type", { exact: true })
+    .selectOption("enum");
+  await severity.getByLabel("Field name", { exact: true }).fill("Severity");
+  await severity.getByLabel("Field name", { exact: true }).press("Enter");
+
+  await tool("Sheets").click();
+  await button("Add Sheet").click();
+  await enter("Sheet name", "Stops");
+  await button("Row").click();
+  await enter("Row key row-1", "summit");
+  await enter("summit Rate", "12");
+  await page
+    .getByLabel("summit Severity", { exact: true })
+    .selectOption({ label: "Priority" });
+  await expect(page.getByRole("table", { name: "Stops data" })).toBeVisible();
+
+  await tool("Resources").click();
+  await button("Add Resource").click();
+  await enter("Resource name", "Station Config");
+  await enter("Rate", "3");
+
+  await tool("Globals").click();
+  await button("Add Global").click();
+  await enter("Global name", "Score");
+  await enter("Global initial value", "6");
+  await page.getByLabel("Save global", { exact: true }).check();
+
+  await tool("Saves").click();
+  await button("Add Slot").click();
+  await enter("Slot name", "Summit Checkpoint");
+  await button("New save version").click();
+  await button("Map Saved Key").click();
+  await enter("Previous global ID", "score-v1");
+
+  await tool("Localization").click();
+  await button("Translation").click();
+  await enter("Translation key text-1", "welcome");
+  await enter("welcome en translation", "Welcome to Summit");
+  await page.getByLabel("New language tag", { exact: true }).fill("es");
+  await button("Language").click();
+  await enter("welcome es translation", "Bienvenido a la cumbre");
+
+  await workspace("Scene").click();
+  await button("Entity").click();
+  await workspace("Blueprints").click();
+  await button("New Blueprint").click();
+  await page.getByLabel("Add block", { exact: true }).selectOption("log");
+  await button("Edit Log value").click();
+  await page
+    .getByLabel("Log value source", { exact: true })
+    .selectOption("field");
+  await button("Edit Log value record").click();
+  await page
+    .getByLabel("Log value record source", { exact: true })
+    .selectOption("data");
+  await page
+    .getByLabel("Log value record data source", { exact: true })
+    .selectOption("sheet");
+  await page
+    .getByLabel("Log value record field", { exact: true })
+    .selectOption({ label: "Rate" });
+  await workspace("Scene").click();
+  await page
+    .getByLabel("Entity blueprint", { exact: true })
+    .selectOption({ label: "New Behaviour" });
+  await button("Play").click();
+  const entries = page.getByRole("tab", { name: "Console", exact: true });
+  await entries.click();
+  await expect
+    .poll(() =>
+      page
+        .locator(".console-entry.info")
+        .evaluateAll((entries) =>
+          entries.some((entry) =>
+            [...entry.childNodes].some(
+              (node) =>
+                node.nodeType === Node.TEXT_NODE &&
+                node.textContent?.trim() === "12",
+            ),
+          ),
+        ),
+    )
+    .toBe(true);
+  await button("Stop").click();
+
+  const download = page.waitForEvent("download");
+  await button("Save project").click();
+  const stored = await readFile((await (await download).path())!, "utf8");
+  const data = parseProject(stored).data!;
+  const [sheet] = data.sheets;
+  const [member] = data.enums[0].members.filter(
+    ({ name }) => name === "Priority",
+  );
+  const rate = data.structs[0].fields.find(({ name }) => name === "Rate")!;
+  const severityField = data.structs[0].fields.find(
+    ({ name }) => name === "Severity",
+  )!;
+  expect(sheet.rows[0]).toMatchObject({
+    key: "summit",
+    values: {
+      [rate.id]: 12,
+      [severityField.id]: { enumId: data.enums[0].id, key: member.id },
+    },
+  });
+  expect(data.resources[0].values[rate.id]).toBe(3);
+  expect(data.globals[0]).toMatchObject({
+    name: "Score",
+    saved: true,
+    initial: 6,
+  });
+  expect(data.saves).toMatchObject({
+    version: 2,
+    slots: [{ name: "Summit Checkpoint" }],
+    migrations: [
+      { from: 1, rename: [{ from: "score-v1", to: data.globals[0].id }] },
+    ],
+  });
+  expect(data.localization.entries[0]).toMatchObject({
+    key: "welcome",
+    values: { en: "Welcome to Summit", es: "Bienvenido a la cumbre" },
+  });
+
+  const chooser = page.waitForEvent("filechooser");
+  await fileMenu(page, "Open Project");
+  await (
+    await chooser
+  ).setFiles({
+    name: "station.mosaic.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(stored),
+  });
+  await expect(
+    page.getByText("Project opened.", { exact: true }),
+  ).toBeVisible();
+  await workspace("Data").click();
+  await tool("Sheets").click();
+  await expect(page.getByLabel("summit Rate", { exact: true })).toHaveValue(
+    "12",
+  );
+});
+
+test("the offline trading post persists slots, migrates portable progress and switches language", async ({
+  context,
+  page,
+}) => {
+  await context.setOffline(true);
+  await page.addInitScript(() => {
+    const draw = CanvasRenderingContext2D.prototype.fillText;
+    const fill = CanvasRenderingContext2D.prototype.fillRect;
+    const seen: string[] = [];
+    const inGame = (canvas: HTMLCanvasElement) =>
+      canvas.closest("#game") !== null;
+    CanvasRenderingContext2D.prototype.fillRect = function (
+      x,
+      y,
+      width,
+      height,
+    ) {
+      if (
+        inGame(this.canvas) &&
+        x === 0 &&
+        y === 0 &&
+        width === this.canvas.width &&
+        height === this.canvas.height
+      )
+        seen.length = 0;
+      return fill.call(this, x, y, width, height);
+    };
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, max) {
+      if (inGame(this.canvas)) seen.push(text);
+      if (max === undefined) return draw.call(this, text, x, y);
+      return draw.call(this, text, x, y, max);
+    };
+    Object.assign(window, { mosaicTradingText: seen });
+  });
+  const filename = pathToFileURL(resolve("dist/ridge-trading-post.html")).href;
+  const setCanvas = async () => {
+    await page.locator("#backend").selectOption("canvas");
+    await expect(page.locator("#runtime-status")).toHaveText("Canvas 2D");
+  };
+  const rendered = async (text: string) =>
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => Reflect.get(window, "mosaicTradingText") as string[],
+        ),
+      )
+      .toContain(text);
+  const playKey = async (key: string) => {
+    await page.locator("#game").focus();
+    await page.keyboard.press(key, { delay: 74 });
+  };
+  await page.goto(filename);
+  await setCanvas();
+  await rendered("North Ridge Cooperative");
+  await rendered("Crowns  28");
+  await playKey("Space");
+  await rendered("Crowns  21");
+  await playKey("p");
+  await playKey("Space");
+  await rendered("Crowns  14");
+  await playKey("l");
+  await rendered("Crowns  21");
+
+  await page.reload();
+  await setCanvas();
+  await rendered("Crowns  28");
+  await page.getByText("Game data", { exact: true }).click();
+  await page.getByRole("button", { name: "Load slot", exact: true }).click();
+  await expect(page.locator("#save-status")).toHaveText("Game loaded.");
+  await rendered("Crowns  21");
+  await page.locator("#game-language").selectOption("es-MX");
+  await rendered("PUESTO DE LA CUMBRE");
+  await rendered("Coronas  21");
+
+  const saved = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "Download save", exact: true })
+    .click();
+  const portable = JSON.parse(
+    await readFile((await (await saved).path())!, "utf8"),
+  );
+  expect(portable).toMatchObject({
+    format: "mosaic-save",
+    version: 2,
+    locale: "es-MX",
+    globals: { "market-coins": 21, "market-bottles": 1 },
+  });
+
+  const picked = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Import save", exact: true }).click();
+  await (
+    await picked
+  ).setFiles({
+    name: "old.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: "mosaic-save",
+        version: 1,
+        project: "lantern-ridge",
+        locale: "en",
+        globals: { "market-coins-v1": 35 },
+      }),
+    ),
+  });
+  await expect(page.locator("#save-status")).toHaveText("Save imported.");
+  await rendered("Crowns  35");
+  await rendered("Bottles  0");
+  await expect(page.locator("#runtime-error")).toBeEmpty();
+});

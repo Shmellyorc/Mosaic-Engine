@@ -5,6 +5,8 @@ import {
   type Block,
   type Blueprint,
   type Diagnostic,
+  type DataSource,
+  type DataSymbols,
   type Expression,
   type EffectCommand,
   type Property,
@@ -25,6 +27,12 @@ export type BlueprintContext = {
   query(query: "self" | "parent" | "scene"): Value;
   exists(reference: Value): boolean;
   animate(clip: string): void;
+  data?: {
+    read(source: DataSource, id: string, key?: string): Value;
+    write(id: string, value: Value): void;
+    slot(id: string, operation: "save" | "load"): void;
+    language(locale: string): void;
+  };
   effect?(command: EffectCommand): void;
   log(blockId: string, value: Value): void;
   fault(diagnostic: Diagnostic): void;
@@ -152,6 +160,7 @@ export function compileBlueprint(
   blueprint: Blueprint,
   axes: ReadonlySet<string>,
   signals: readonly Signal[] = [],
+  data?: DataSymbols,
 ) {
   const diagnostics: Diagnostic[] = [];
   const report = (blockId: string, message: string) =>
@@ -182,6 +191,26 @@ export function compileBlueprint(
     switch (node.kind) {
       case "literal":
         return { type: typeOf(node.value), read: () => node.value };
+      case "data": {
+        const type = data ? data.readType(node.source, node.id) : node.type;
+        if (!type || (node.source !== "locale" && !node.id))
+          report(id, "Choose a valid data source.");
+        if (node.source === "sheet" && !node.key)
+          report(id, "Enter the sheet row key.");
+        const key = node.key && field(node.key, id, scope, "string");
+        return {
+          type: type ?? node.type,
+          read(ctx, locals) {
+            if (!ctx.data)
+              return fault("This runtime does not provide project data.");
+            return ctx.data.read(
+              node.source,
+              node.id,
+              key && String(key(ctx, locals)),
+            );
+          },
+        };
+      }
       case "variable": {
         const type = scope.types.get(node.id);
         if (!type) report(id, "Choose a declared variable in scope.");
@@ -240,9 +269,21 @@ export function compileBlueprint(
           },
         };
       }
+      case "toText": {
+        const value = field(node.value, id, scope);
+        return {
+          type: "string",
+          read: (ctx, locals) => displayValue(value(ctx, locals)),
+        };
+      }
       case "field": {
         const record = field(node.record, id, scope, "record");
         if (!node.key.trim()) report(id, "Enter the name of a record field.");
+        if (node.record.kind === "data") {
+          const columns = data?.fields(node.record.source, node.record.id);
+          if (columns && columns.get(node.key) !== node.type)
+            report(id, "Choose a field of the declared record type.");
+        }
         if (
           node.record.kind === "literal" &&
           typeof node.record.value === "object" &&
@@ -617,6 +658,36 @@ export function compileBlueprint(
           error("Choose a sound.");
         return function* (ctx) {
           dispatchEffect(ctx, block);
+        };
+      case "writeGlobal": {
+        const type = data?.writeType(block.globalId);
+        if (block.globalId === "unassigned" || (data && !type))
+          error("Choose a writable global.");
+        const value = read(block.value, type);
+        return function* (ctx, locals) {
+          if (!ctx.data)
+            return fault("This runtime does not provide project data.");
+          ctx.data.write(block.globalId, value(ctx, locals));
+        };
+      }
+      case "saveSlot":
+        if (
+          block.slotId === "unassigned" ||
+          (data && !data.hasSlot(block.slotId))
+        )
+          error("Choose a save slot.");
+        return function* (ctx) {
+          if (!ctx.data)
+            return fault("This runtime does not provide save slots.");
+          ctx.data.slot(block.slotId, block.operation);
+        };
+      case "language":
+        if (!block.locale || (data && !data.hasLocale(block.locale)))
+          error("Choose a project language.");
+        return function* (ctx) {
+          if (!ctx.data)
+            return fault("This runtime does not provide localization.");
+          ctx.data.language(block.locale);
         };
       case "log": {
         const value = read(block.value);

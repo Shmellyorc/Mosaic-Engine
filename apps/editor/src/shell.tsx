@@ -15,6 +15,7 @@ import {
 } from "dockview-react";
 import {
   AudioLines,
+  Database,
   Box,
   Clock3,
   Sparkles,
@@ -58,6 +59,7 @@ import { AnimatorWorkspace, InputWorkspace } from "./systems";
 import { TimelineWorkspace } from "./timeline";
 import { ParticlesWorkspace } from "./particles";
 import { AudioWorkspace } from "./audio";
+import { DataWorkspace } from "./data-workspace";
 import { GamePreview, SceneViewport } from "./viewport";
 import { worldTools } from "./world";
 import {
@@ -84,6 +86,7 @@ const icons = {
   Timeline: Clock3,
   Particles: Sparkles,
   Audio: AudioLines,
+  Data: Database,
   UI: Monitor,
   Input: Gamepad2,
 };
@@ -161,6 +164,7 @@ function WorkspacePanel() {
       {workspace === "Timeline" && <TimelineWorkspace />}
       {workspace === "Particles" && <ParticlesWorkspace />}
       {workspace === "Audio" && <AudioWorkspace />}
+      {workspace === "Data" && <DataWorkspace />}
       {workspace === "UI" && (
         <div className="workspace scene-wrap">
           <div className="context-actions">

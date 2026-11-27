@@ -19,6 +19,7 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 - **Blueprints** edits typed expressions, nested branches and loops, reusable functions, and scene events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block.
 - **Tilemap**, **Physics**, **Cameras**, **Navigation**, and **Lighting** provide dedicated world workspaces with editable controls and viewport previews.
 - **Animator**, **Timeline**, **Particles**, and **Audio** provide dedicated authoring and preview workspaces for gameplay effects.
+- **Data** opens tools for typed sheets, enums, structs, resources, globals, saves, and localization.
 - **UI** and **Input** place HUD labels and bind keyboard axes.
 - Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
@@ -53,13 +54,23 @@ Choose **Ridge Workshop** from the sample’s scene list and press Play. Move wi
 
 Choose **Lantern Signal Lab** from the sample’s scene list. Move with A/D or the arrow keys to see the Animator change state. Press Space to fire the beacon, sweep the charge indicator, and trigger a particle burst and chime. Enable audio in the exported player before sending a signal.
 
+## Author project data
+
+- In **Data → Structs**, define fields and defaults. Use an enum field for registry-backed choices or a text field configured as a sheet relation for a reference to another row. **Sheets** validates unique row keys and keeps related keys in sync when a row is renamed. **Resources** edits a single named record against a struct.
+- In a Blueprint value chip, choose **Project data** to read a global, sheet row, resource, translation, active language, or save-slot status. Use **Record field** to select a typed field, and **To text** to display a non-text value. Enum literals can select a registered member.
+- **Globals** defines initial values shared by all entities in a running game. **Write Global** updates a writable value. Constants are read-only. Mark individual globals for gameplay saves.
+- **Saves** defines named slots and version-to-version migration steps. A slot stores marked globals and the active language. Migrations can rename or drop saved IDs, supply defaults for new values, and retain compatible fields in an updated struct. **Save or Load Game** refers to a named slot. The standalone **Game data** menu also saves and loads slots and imports or downloads portable save files.
+- **Localization** defines languages and keyed text. Missing translations fall back through the active language’s parent tags, the default language, then the translation key. Switch the player’s language with **Set Language** or the standalone menu.
+
+Choose **Ridge Trading Post** from the sample’s scene list. Press Space to buy oil, P to save the Trading Ledger, and L to load it. The price, supplier, and trade limit are read from project data. The exported game can switch between English and Spanish and import a previous-version ledger.
+
 ## Rendering and export
 
 The same runtime feeds the PixiJS accelerated backend and the independent Canvas 2D renderer. **Auto Renderer** tries acceleration and switches to Canvas 2D if initialization fails or the rendering context is lost. Choose a backend explicitly from the toolbar. Canvas 2D is the compatibility API and can use hardware acceleration depending on the browser.
 
-**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images and WAV sounds. Open that file in a browser to play. The export runs without React or Electron.
+**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images and WAV sounds, and the project data catalog. Open that file in a browser to play. The export runs without React or Electron.
 
-A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds images and sounds and preserves entity IDs, hierarchy, scene settings, input axes, Animator definitions, effects and Blueprint data.
+A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds images and sounds and preserves entity IDs, hierarchy, scene settings, input axes, Animator definitions, effects, authored data and Blueprint data. Gameplay save files are separate from project files.
 
 ## Development and verification
 
@@ -84,6 +95,6 @@ npx playwright install chromium
 npm run smoke
 ```
 
-The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, and `dist/lantern-signal-lab.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the offline samples as run artifacts.
+The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, and `dist/ridge-trading-post.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the offline samples as run artifacts.
 
 MIT licensed.

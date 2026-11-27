@@ -1,3 +1,10 @@
+import { GameData, type SlotStorage } from "./data";
+export {
+  GameData,
+  browserSlotStorage,
+  memorySlotStorage,
+  MAX_SAVE_BYTES,
+} from "./data";
 import {
   compileBlueprint,
   displayValue,
@@ -185,6 +192,7 @@ export function connectKeyboard(
 
 export class Game {
   readonly input: InputState;
+  readonly data: GameData;
   readonly logs: RuntimeLog[] = [];
   readonly scene: Scene;
   private scheduler: BlueprintScheduler;
@@ -234,11 +242,13 @@ export class Game {
     readonly project: Project,
     sceneId = project.startSceneId,
     debug = false,
+    slots?: SlotStorage,
   ) {
     const scene = project.scenes.find((entry) => entry.id === sceneId);
     if (!scene) throw new Error("Scene could not be found.");
     this.scene = scene;
     this.input = new InputState(project.input);
+    this.data = new GameData(project.id, project.data, slots);
     this.tiles = new TileWorld(scene.tilemap);
     this.scheduler = new BlueprintScheduler(STEP, debug);
     this.assets = new Set(project.assets.map((asset) => asset.id));
@@ -320,7 +330,7 @@ export class Game {
       }
       let program = compiled.get(definition.id);
       if (!program) {
-        program = compileBlueprint(definition, axes, signals);
+        program = compileBlueprint(definition, axes, signals, this.data.index);
         compiled.set(definition.id, program);
       }
       const variables = program.createVariables();
@@ -391,6 +401,15 @@ export class Game {
         state.animation.play(clip);
       },
       effect: (command) => this.effect(state, command),
+      data: {
+        read: (source, id, key) => this.data.read(source, id, key),
+        write: (id, value) => this.data.write(id, value),
+        slot: (id, operation) => {
+          if (operation === "save") this.data.save(id);
+          else this.data.load(id);
+        },
+        language: (locale) => this.data.setLanguage(locale),
+      },
       log: (blockId, value) =>
         this.log({
           level: "info",
