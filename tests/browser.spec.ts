@@ -311,31 +311,15 @@ test("dock panels can be moved, resized, reopened, saved, and reset", async ({
   await expect
     .poll(async () => (await locate(project))!.width)
     .toBeGreaterThan(initialProject.width + 16);
-  async function moveTab(from: Locator, to: Locator) {
-    const source = (await from.boundingBox())!;
-    const target = (await to.boundingBox())!;
-    await page.mouse.move(
-      source.x + source.width * 0.35,
-      source.y + source.height * 0.5,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      source.x + source.width * 0.35 + 10,
-      source.y + source.height * 0.5 + 3,
-      { steps: 5 },
-    );
-    await page.mouse.move(
-      target.x + target.width * 0.5,
-      target.y + target.height * 0.5,
-      { steps: 16 },
-    );
-    await page.mouse.up();
+  async function dockWith(from: Locator, name: string) {
+    await from.click({ button: "right" });
+    await page.getByText(`Dock with ${name}`, { exact: true }).click();
   }
-  await moveTab(inspector, project);
+  await dockWith(inspector, "Project");
   await expect
     .poll(async () => (await locate(inspector))!.x)
     .toBeLessThan(initialInspector.x);
-  await moveTab(preview, inspector);
+  await dockWith(preview, "Inspector");
   await expect
     .poll(async () => (await locate(preview))!.x)
     .toBeLessThan(initialPreview.x);

@@ -689,6 +689,22 @@ export function App() {
           getTabContextMenuItems={({ panel, group, api }) => {
             if (panel.id === "workspace") return [];
             const location = group.api.location;
+            const destinations = ["project", "inspector", "preview"].flatMap(
+              (id) => {
+                const destination = api.getPanel(id);
+                if (!destination || destination.group === group) return [];
+                return [
+                  {
+                    label: `Dock with ${registry[id].title}`,
+                    action: () =>
+                      panel.api.moveTo({
+                        group: destination.group,
+                        position: "center",
+                      }),
+                  },
+                ];
+              },
+            );
             return [
               location.type === "edge"
                 ? {
@@ -709,6 +725,7 @@ export function App() {
                       api.autoHideEdgeGroup("right");
                     },
                   },
+              ...destinations,
               "close",
             ];
           }}
