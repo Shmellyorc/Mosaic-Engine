@@ -66,6 +66,10 @@ A persistent entity carries its whole root hierarchy across transitions. Its liv
 - Click a tile’s breakpoint indicator or press **F9** on its header. **Step Block** in Debug executes one block and shows the current call stack and locals. Continue with **Resume** or the top-bar Play button. Blueprint edits during play recompile affected behaviours, keep compatible entity variables, and restart their update handlers on the next simulation tick. Use Restart to rerun On Start handlers.
 - Blueprint format 2 preserves functions, events and typed expression data. Format 1 blueprints still open and run. The exported player executes the same compiled logic with editor breakpoints disabled.
 
+## Build reusable behavior trees
+
+Create a `.behavior` asset in Project, then assign it to a scene entity or prefab member. The editor presents ordered sequences and selectors as nested tiles. Conditions read typed blackboard keys or literals. Actions can wait, write a key, or call a Blueprint function with typed inputs and optional results. Decorators invert or force success, repeat, time out, or enforce a cooldown. Play mode shows node outcomes and per-entity blackboard values.
+
 ## Author a world
 
 - **Tilemap** paints solid colors or terrain on independent layers mapped to scene render layers. Terrain can connect with generated edges or a 16-frame atlas. Atlas frames are ordered by the sum of the matching neighbor flags, with 1 for north, 2 for east, 4 for south, and 8 for west. Layer controls set visibility, opacity, collision participation, and traversal cost. Tile data is indexed on demand in 16 × 16 cell chunks, with up to 32 resident indexes per tile layer.

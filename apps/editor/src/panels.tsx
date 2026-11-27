@@ -1,3 +1,4 @@
+import { newBehaviorTree } from "./behavior-tree";
 import { newUiScreen } from "./ui-flow";
 import {
   documentKey,
@@ -223,6 +224,26 @@ export function ProjectPanel() {
           .filter(({ name }) => matches(name))
           .map(({ id, name }) =>
             row(name + ".ui", { kind: "uiScreen", id }, Layers3),
+          )}
+      </details>
+      <details className="tree-group">
+        <summary>
+          <Folder size={15} /> Behavior Trees
+          <button
+            className="icon-button push"
+            aria-label="New Behavior Tree"
+            onClick={(event) => {
+              event.preventDefault();
+              newBehaviorTree();
+            }}
+          >
+            <Plus size={15} />
+          </button>
+        </summary>
+        {project.behaviorTrees
+          ?.filter(({ name }) => matches(name))
+          .map(({ id, name }) =>
+            row(name + ".behavior", { kind: "behaviorTree", id }),
           )}
       </details>
       <details className="tree-group">
@@ -574,6 +595,7 @@ function EntityInspector() {
   const entity = useEditor(selectedEntity);
   const assets = useEditor((state) => state.project.assets);
   const blueprints = useEditor((state) => state.project.blueprints);
+  const trees = useEditor((state) => state.project.behaviorTrees);
   if (!entity) return <SceneSettings />;
   const descendants = hierarchyIds(scene.entities, entity.id);
   const visual = entity.visual;
@@ -647,6 +669,26 @@ function EntityInspector() {
             }
           />
         </Field>
+        {!!trees?.length && (
+          <Field label="Behavior Tree">
+            <select
+              aria-label="Entity Behavior Tree"
+              value={entity.behaviorTree ?? ""}
+              onChange={(event) =>
+                editEntity((draft) => {
+                  draft.behaviorTree = event.target.value || undefined;
+                })
+              }
+            >
+              <option value="">None</option>
+              {trees.map(({ id, name }) => (
+                <option key={id} value={id}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="Persistent tree">
           <input
             aria-label="Keep entity tree between scenes"

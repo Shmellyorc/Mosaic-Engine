@@ -4,6 +4,7 @@ export const editors = [
   "Scene",
   "Scene Flow",
   "Blueprints",
+  "Behavior Trees",
   "Tilemap",
   "Physics",
   "Cameras",
@@ -21,6 +22,7 @@ export const editors = [
 export type Workspace = (typeof editors)[number];
 
 export type DocumentKind =
+  | "behaviorTree"
   | "uiFlow"
   | "uiScreen"
   | "sceneFlow"
@@ -53,6 +55,7 @@ const kinds = new Set<DocumentKind>([
   ...entityKinds,
   "blueprint",
   "sceneFlow",
+  "behaviorTree",
   "uiFlow",
   "uiScreen",
   "image",
@@ -73,6 +76,11 @@ export function documentInfo(project: Project, ref: DocumentRef) {
   let extension: string = ref.kind;
   let workspace: Workspace = "Scene";
   switch (ref.kind) {
+    case "behaviorTree":
+      name = project.behaviorTrees?.find((tree) => tree.id === ref.id)?.name;
+      extension = "behavior";
+      workspace = "Behavior Trees";
+      break;
     case "uiFlow":
       name = "Project";
       extension = "uiflow";

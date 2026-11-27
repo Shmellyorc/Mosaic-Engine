@@ -18,6 +18,8 @@ import {
 } from "./effects";
 import { catalogSchema, validateCatalog } from "./data";
 import { uiSchema, validateUi } from "./ui";
+import { behaviorTreeSchema, validateBehaviorTree } from "./behavior-tree";
+export * from "./behavior-tree";
 import { uiFlowSchema, validateUiFlow } from "./ui-flow";
 export * from "./ui-flow";
 import { sceneFlowSchema } from "./scene-flow";
@@ -168,6 +170,7 @@ export const entitySchema = z.object({
   }),
   visual: visual.nullable(),
   blueprintId: id.nullable(),
+  behaviorTree: id.optional(),
   attachments: z.array(attachmentSchema).max(32).optional(),
   prefab: prefabLinkSchema.optional(),
   persistent: z.boolean().optional(),
@@ -289,6 +292,7 @@ const projectSchema = z.object({
   startSceneId: id,
   sceneFlow: sceneFlowSchema.optional(),
   uiFlow: uiFlowSchema.optional(),
+  behaviorTrees: z.array(behaviorTreeSchema).max(256).optional(),
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
@@ -353,6 +357,9 @@ export function validateProject(input: unknown): Project {
   const sceneIds = idsOf(project.scenes, "scene");
   const assetIds = idsOf(project.assets, "asset");
   const blueprintIds = idsOf(project.blueprints, "blueprint");
+  const behaviorTrees = idsOf(project.behaviorTrees ?? [], "behavior tree");
+  for (const tree of project.behaviorTrees ?? [])
+    validateBehaviorTree(tree, project.blueprints);
   const definitions = new Map(
     project.blueprints.map((blueprint) => [blueprint.id, blueprint]),
   );
@@ -365,6 +372,10 @@ export function validateProject(input: unknown): Project {
   );
   const soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
   function validateAttachments(entity: Entity, entityIds: Set<string>) {
+    if (entity.behaviorTree && !behaviorTrees.has(entity.behaviorTree))
+      throw new Error(
+        `Entity "${entity.name}" references a missing Behavior Tree.`,
+      );
     const attachments = entity.attachments;
     if (!attachments?.length) return;
     idsOf(attachments, "Blueprint attachment");
@@ -690,6 +701,7 @@ export function serializeProject(project: Project): string {
     ) ||
     !!project.sceneFlow ||
     !!project.uiFlow ||
+    !!project.behaviorTrees?.length ||
     project.blueprints.some(
       ({ requires, variables }) =>
         !!requires?.length || variables.some(({ exposed }) => exposed),

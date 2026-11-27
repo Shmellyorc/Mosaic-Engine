@@ -155,6 +155,7 @@ export const prefabProperties = [
   "camera",
   "audio",
   "blueprintId",
+  "behaviorTree",
   "attachments",
   "persistent",
 ] as const;

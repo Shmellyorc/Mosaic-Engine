@@ -12,6 +12,7 @@ export const componentNames = [
   "tileLayers",
   "audio",
   "blueprints",
+  "behaviorTree",
 ] as const;
 export type ComponentName = (typeof componentNames)[number];
 type RegisteredComponent = {
@@ -40,6 +41,11 @@ export const entityComponents: readonly RegisteredComponent[] = [
     key: "tileLayers",
     name: "Tile layers",
     present: (entity) => !!entity.tileLayers?.length,
+  },
+  {
+    key: "behaviorTree",
+    name: "Behavior tree",
+    present: (entity) => !!entity.behaviorTree,
   },
   { key: "audio", name: "Audio source", present: (entity) => !!entity.audio },
   {

@@ -1,3 +1,4 @@
+import { BehaviorRunner } from "./behavior-tree";
 import { SceneWorld, type SceneCommand } from "./scene-flow";
 export type { SceneCommand } from "./scene-flow";
 import { UiFlowWorld, type UiCommand } from "./ui-flow";
@@ -313,6 +314,7 @@ export class Game {
   scene: Scene;
   private scheduler: BlueprintScheduler;
   private sceneWorld?: SceneWorld;
+  private behaviors = new Map<string, BehaviorRunner>();
   private sceneQueue: SceneCommand[] = [];
   private transition?: {
     command: SceneCommand;
@@ -439,6 +441,7 @@ export class Game {
     );
     this.buildHierarchy();
     this.reloadBlueprints(project.blueprints, this.signals);
+    this.refreshBehaviorTrees();
   }
 
   private createUi(scene: Scene, previous?: UiWorld) {
@@ -721,6 +724,7 @@ export class Game {
           }
           for (const key of [
             "attachments",
+            "behaviorTree",
             "audio",
             "camera",
             "tileLayers",
@@ -791,14 +795,14 @@ export class Game {
     }
     if (oldScene.timelines !== scene.timelines)
       this.motion.reload(scene.timelines ?? [], this.started);
-    if (
+    const blueprintsChanged =
       rebind ||
       dataChanged ||
       axesChanged ||
       previous.extensions !== project.extensions ||
       previous.blueprints !== project.blueprints ||
-      previous.signals !== project.signals
-    ) {
+      previous.signals !== project.signals;
+    if (blueprintsChanged) {
       this.reloadBlueprints(
         project.blueprints,
         project.signals ?? emptySignals,
@@ -807,6 +811,92 @@ export class Game {
           previous.extensions !== project.extensions,
       );
     }
+    if (
+      blueprintsChanged ||
+      previous.behaviorTrees !== project.behaviorTrees ||
+      oldScene.entities !== scene.entities
+    )
+      this.refreshBehaviorTrees(blueprintsChanged);
+  }
+
+  private refreshBehaviorTrees(force = false) {
+    const documents = this.project.behaviorTrees;
+    if (!documents?.length && !this.behaviors.size) return;
+    const trees = new Map(documents?.map((tree) => [tree.id, tree]));
+    const compiled = new Map<string, ReturnType<typeof compileBlueprint>>();
+    const axes = new Set(this.project.input.map(({ id }) => id));
+    const definitions = new Map(
+      this.project.blueprints.map((blueprint) => [blueprint.id, blueprint]),
+    );
+    const next = new Map<string, BehaviorRunner>();
+    for (const state of this.world.query("behaviorTree")) {
+      const id = state.entity.id;
+      const tree = trees.get(state.entity.behaviorTree!);
+      if (!tree) continue;
+      const previous = this.behaviors.get(id);
+      if (previous?.tree === tree && !force) {
+        next.set(id, previous);
+        continue;
+      }
+      const contexts = new Map<string, BlueprintContext>();
+      const runner = new BehaviorRunner(
+        tree,
+        (node, args) => {
+          const bound = this.bindingsByEntity
+            .get(id)
+            ?.find(({ blueprintId }) => blueprintId === node.blueprintId);
+          const definition = definitions.get(node.blueprintId);
+          if (!definition)
+            throw new Error("The Blueprint action definition is missing.");
+          const missing = definition.requires?.find(
+            (key) =>
+              !entityComponents
+                .find((item) => item.key === key)
+                ?.present(state.entity),
+          );
+          if (missing)
+            throw new Error("The Blueprint action requires " + missing + ".");
+          let program = bound?.program ?? compiled.get(node.blueprintId);
+          if (!program) {
+            program = compileBlueprint(
+              definition,
+              axes,
+              this.signals,
+              this.data.index,
+              this.project.extensions,
+            );
+            compiled.set(node.blueprintId, program);
+          }
+          let context = contexts.get(node.blueprintId);
+          if (!context) {
+            context = this.context(
+              state,
+              bound?.context.variables ?? program.createVariables(),
+              node.blueprintId,
+              "behavior:" + tree.id,
+              true,
+            );
+            contexts.set(node.blueprintId, context);
+          }
+          return program.beginFunction(context, node.functionId, args);
+        },
+        (node, error) =>
+          this.fault(id, { blockId: node, message: String(error) }),
+        previous?.tree.id === tree.id ? previous : undefined,
+      );
+      next.set(id, runner);
+    }
+    this.behaviors = next;
+  }
+
+  getBehaviorTree(id: string) {
+    return this.behaviors.get(id)?.snapshot();
+  }
+
+  writeBlackboard(entityId: string, key: string, value: Value) {
+    const behavior = this.behaviors.get(entityId);
+    if (!behavior) throw new Error("The entity has no Behavior Tree.");
+    behavior.write(key, value);
   }
 
   private animationFor(entity: Entity) {
@@ -955,6 +1045,7 @@ export class Game {
     variables: Map<string, Value>,
     blueprintId: string,
     attachmentId: string,
+    external = false,
   ): BlueprintContext {
     const entity = state.entity;
     return {
@@ -990,7 +1081,8 @@ export class Game {
           this.world.has(this.resolveReference(entity, reference.id))) ||
           (reference.kind === "asset" && this.assets.has(reference.id))),
       emit: (id, value) => {
-        this.scheduler.emit(id, value);
+        if (external) this.scheduler.queueUi(id, value);
+        else this.scheduler.emit(id, value);
         const source =
           this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id;
         this.triggerSceneSignal(id, source);
@@ -1051,8 +1143,10 @@ export class Game {
           blockId,
           message: displayValue(value),
         }),
-      fault: (diagnostic) =>
-        this.fault(entity.id, diagnostic, blueprintId, attachmentId),
+      fault: (diagnostic) => {
+        if (external) throw new Error(diagnostic.message);
+        this.fault(entity.id, diagnostic, blueprintId, attachmentId);
+      },
     };
   }
 
@@ -1219,6 +1313,8 @@ export class Game {
   private finishTick() {
     if (this.scheduler.paused || !this.tickPending) return;
     this.tickPending = false;
+    if (this.behaviors.size)
+      for (const behavior of this.behaviors.values()) behavior.tick(STEP);
     this.motion.step(STEP);
     if (this.tileVisibilityChanged) {
       this.navigation.invalidate();

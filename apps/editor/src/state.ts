@@ -367,6 +367,15 @@ export function openEditor(workspace: Workspace) {
   const forScene = (kind: DocumentRef["kind"], id = scene.id) =>
     openDocument({ kind, id, sceneId: scene.id }, { workspace });
   switch (workspace) {
+    case "Behavior Trees": {
+      const tree =
+        state.project.behaviorTrees?.find(
+          ({ id }) => id === selected?.behaviorTree,
+        ) ?? state.project.behaviorTrees?.[0];
+      if (tree) openDocument({ kind: "behaviorTree", id: tree.id });
+      else forScene("scene");
+      break;
+    }
     case "UI Flow":
       openDocument(uiFlowDocument);
       break;

@@ -161,6 +161,7 @@ export function PrefabDocument() {
   const prefab = useEditor((state) =>
     state.project.prefabs?.find(({ id }) => id === ref?.id),
   );
+  const trees = useEditor((state) => state.project.behaviorTrees);
   const [memberId, setMemberId] = useState("");
   if (!prefab) return null;
   const member =
@@ -232,6 +233,28 @@ export function PrefabDocument() {
                   }
                 />
               </Field>
+              {!!trees?.length && (
+                <Field label="Behavior Tree">
+                  <select
+                    aria-label="Prefab Behavior Tree"
+                    value={member.behaviorTree ?? ""}
+                    onChange={(event) =>
+                      change((draft) => {
+                        draft.entities.find(
+                          ({ id }) => id === member.id,
+                        )!.behaviorTree = event.target.value || undefined;
+                      })
+                    }
+                  >
+                    <option value="">None</option>
+                    {trees.map(({ id, name }) => (
+                      <option key={id} value={id}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               {(["x", "y", "width", "height", "rotation"] as const).map(
                 (key) => (
                   <Field label={key} key={key}>

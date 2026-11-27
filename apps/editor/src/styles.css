@@ -2197,3 +2197,83 @@ button.tree-row {
   gap: 6px;
   max-width: 900px;
 }
+
+.behavior-board {
+  padding: 16px;
+}
+.tree-tile {
+  margin-bottom: 8px;
+  border: 1px solid #60477d;
+  border-radius: 7px;
+  background: #211b30;
+  overflow: hidden;
+}
+.tree-tile > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 5px;
+  background: #372848;
+}
+.tree-tile header small {
+  color: var(--muted);
+  margin-right: auto;
+}
+.tree-tile header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.tree-tile-name {
+  border: 0;
+  background: transparent;
+  font-weight: 650;
+}
+.tree-tile-name[aria-pressed="true"] {
+  box-shadow: inset 0 -2px #c395ff;
+}
+.tree-tile-condition,
+.tree-tile-selector {
+  border-color: #3e678e;
+}
+.tree-tile-condition > header,
+.tree-tile-selector > header {
+  background: #23374e;
+}
+.tree-tile-call,
+.tree-tile-write {
+  border-color: #39785c;
+}
+.tree-tile-call > header,
+.tree-tile-write > header {
+  background: #243d32;
+}
+.tree-tile-decorator {
+  border-color: #8d693e;
+}
+.tree-tile-decorator > header {
+  background: #453523;
+}
+.tree-tile-children {
+  padding: 8px 9px 0 16px;
+  margin-left: 9px;
+  border-left: 2px solid #67527d;
+}
+.tree-tile-status {
+  font-size: 11px;
+  color: #e4ca86;
+}
+.tree-tile-status[data-status="success"] {
+  color: #a1e3bd;
+}
+.tree-tile-status[data-status="failure"] {
+  color: #f6a7aa;
+}
+.tree-variable {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+  min-width: 0;
+}

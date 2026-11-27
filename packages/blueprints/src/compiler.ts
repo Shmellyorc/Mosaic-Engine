@@ -107,7 +107,7 @@ function entityId(value: Value) {
     throw new Error("Choose an existing target entity.");
   return value.id;
 }
-function equal(a: Value, b: Value): boolean {
+export function equalValues(a: Value, b: Value): boolean {
   if (typeof a !== "object" || typeof b !== "object") return a === b;
   switch (a.kind) {
     case "vector":
@@ -124,7 +124,7 @@ function equal(a: Value, b: Value): boolean {
         Object.keys(a.fields).length === Object.keys(b.fields).length &&
         Object.entries(a.fields).every(
           ([key, item]) =>
-            Object.hasOwn(b.fields, key) && equal(item, b.fields[key]),
+            Object.hasOwn(b.fields, key) && equalValues(item, b.fields[key]),
         )
       );
   }
@@ -468,9 +468,9 @@ export function compileBlueprint(
           case "%":
             return finite(x % y);
           case "==":
-            return equal(a, b);
+            return equalValues(a, b);
           case "!=":
-            return !equal(a, b);
+            return !equalValues(a, b);
           case "<":
             return x < y;
           case ">":
@@ -858,6 +858,32 @@ export function compileBlueprint(
   return {
     diagnostics,
     entries,
+    beginFunction(
+      ctx: BlueprintContext,
+      id: string,
+      args: ReadonlyMap<string, Value>,
+    ) {
+      const fn = functions.get(id);
+      const instructions = compiledFunctions.get(id);
+      if (!fn || !instructions || diagnostics.length)
+        throw new Error(
+          "The Blueprint function is missing or has compile errors.",
+        );
+      const scope = local();
+      for (const parameter of fn.parameters) {
+        const value = args.get(parameter.id);
+        if (value === undefined || typeOf(value) !== parameter.type)
+          throw new Error(
+            "A Behavior Tree function argument has an incompatible type.",
+          );
+        scope.locals.set(parameter.id, value);
+      }
+      return execute(instructions, ctx, scope, {
+        entryId: id,
+        name: fn.name,
+        depth: 0,
+      });
+    },
     createVariables: () =>
       new Map(
         blueprint.variables.map((variable) => [variable.id, variable.initial]),

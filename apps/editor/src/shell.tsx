@@ -61,6 +61,7 @@ import { UiInspector } from "./ui-inspector";
 import { selectedWidget } from "./ui-author";
 import { GamePreview, SceneViewport } from "./viewport";
 import { documentInfo, editors } from "./documents";
+import { BehaviorWorkspace, newBehaviorTree } from "./behavior-tree";
 import { UiFlowWorkspace } from "./ui-flow";
 import { SceneFlowWorkspace } from "./scene-flow";
 import { DocumentTabs, LocalTools, PrefabDocument } from "./document-view";
@@ -134,6 +135,7 @@ function WorkspacePanel() {
   const project = useEditor((state) => state.project);
   if (!ref || !documentInfo(project, ref))
     return <div className="panel-body muted">Open a file from Project.</div>;
+  if (ref.kind === "behaviorTree") return <BehaviorWorkspace key={ref.id} />;
   if (ref.kind === "uiFlow") return <UiFlowWorkspace />;
   if (ref.kind === "sceneFlow") return <SceneFlowWorkspace />;
   if (ref.kind === "image") return <Assets />;
@@ -595,7 +597,12 @@ export function App() {
                       const panel = api?.getPanel("audio");
                       if (panel) panel.api.setActive();
                       else if (api) togglePanel("audio");
-                    } else openEditor(name);
+                    } else if (
+                      name === "Behavior Trees" &&
+                      !useEditor.getState().project.behaviorTrees?.length
+                    )
+                      newBehaviorTree();
+                    else openEditor(name);
                   }}
                 >
                   {name}
