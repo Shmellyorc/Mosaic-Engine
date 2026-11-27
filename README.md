@@ -18,7 +18,7 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 - **Scene** creates scenes, entities and child entities. Use the dockable Inspector or Scene Settings to adjust components, layer order, camera follow and transforms. Drag visible entities to move them, Alt-drag to pan, and scroll to zoom.
 - **Blueprints** edits typed expressions and nested branches for On Start and Update events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block. During play, Debug shows execution activity and entity variables.
 - **Tilemap**, **Animator**, **UI**, and **Input** provide separate central workspaces for painting grid tiles, editing and previewing spritesheet clips, placing HUD labels, and binding keyboard axes.
-- **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them. Drag the sash to resize.
+- **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab to collapse it into the sidebar.
 - **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring.
 
 Open **File → Open Lantern Ridge Sample** for a self-contained example. Move the lantern keeper with A/D or the arrow keys. The project demonstrates camera follow, a spritesheet with idle and walking clips, and a screen-space HUD. Sample art is original to this repository and covered by the LICENSE.

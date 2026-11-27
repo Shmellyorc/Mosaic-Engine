@@ -15,6 +15,7 @@ import { useMemo, useState } from "react";
 import { createEntity, createScene, newId, type Entity } from "@mosaic/model";
 import { BlueprintInspector } from "./blueprint";
 import { Field, NumberField, Section, TextField } from "./controls";
+import { playGame } from "./play";
 import {
   chooseEntity,
   chooseScene,
@@ -801,12 +802,14 @@ export function ConsolePanel() {
       <div className="panel-head">
         <strong>Runtime & Editor</strong>
         <button
-          onClick={() =>
+          onClick={() => {
+            const game = playGame();
+            if (game) game.logs.length = 0;
             useEditor.setState((state) => ({
               messages: [],
               snapshot: { ...state.snapshot, logs: [] },
-            }))
-          }
+            }));
+          }}
         >
           Clear
         </button>

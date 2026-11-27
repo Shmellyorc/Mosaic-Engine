@@ -685,6 +685,33 @@ export function App() {
           onReady={onReady}
           components={components}
           defaultTabComponent={DockTab}
+          autoHideEdgeGroups={{ right: true }}
+          getTabContextMenuItems={({ panel, group, api }) => {
+            if (panel.id === "workspace") return [];
+            const location = group.api.location;
+            return [
+              location.type === "edge"
+                ? {
+                    label: "Pin Sidebar",
+                    action: () => api.pinEdgeGroup(location.position),
+                  }
+                : {
+                    label: "Collapse to Sidebar",
+                    action: () => {
+                      api.revealEdgeGroupWithData(
+                        "right",
+                        {
+                          groupId: group.id,
+                          panelId: panel.id,
+                        },
+                        { autoHide: true },
+                      );
+                      api.autoHideEdgeGroup("right");
+                    },
+                  },
+              "close",
+            ];
+          }}
         />
       </div>
       <footer className="statusbar">

@@ -196,8 +196,11 @@ export function rendererFactories(pixi: PixiFactory, canvas = createCanvas) {
         return current.backend;
       },
       resize(w, h) {
-        width = Math.max(1, Math.round(w));
-        height = Math.max(1, Math.round(h));
+        const nextWidth = Math.max(1, Math.round(w));
+        const nextHeight = Math.max(1, Math.round(h));
+        if (width === nextWidth && height === nextHeight) return;
+        width = nextWidth;
+        height = nextHeight;
         current.resize(width, height);
       },
       render(frame) {

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseProject } from "@mosaic/model";
@@ -190,6 +190,36 @@ test("the exported sample opens offline and shows comparable pixels in PixiJS an
   );
 });
 
+test("the exported game recovers without acceleration and reports an invalid texture", async ({
+  page,
+}, testInfo) => {
+  const sample = await readFile(resolve("dist/lantern-ridge.html"), "utf8");
+  const broken = sample.replace(
+    /data:image\/png;base64,[A-Za-z0-9+/=]+/,
+    "data:image/png;base64,AAAA",
+  );
+  expect(broken).not.toBe(sample);
+  const file = testInfo.outputPath("texture-error.html");
+  await writeFile(file, broken);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "gpu", { value: undefined });
+    const original = HTMLCanvasElement.prototype.getContext;
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      value(this: HTMLCanvasElement, type: string, ...args: unknown[]) {
+        return type === "2d"
+          ? Reflect.apply(original, this, [type, ...args])
+          : null;
+      },
+    });
+  });
+  await page.goto(pathToFileURL(file).href);
+  await expect(page.locator("#runtime-status")).toHaveText("Canvas 2D");
+  await expect(page.locator("#runtime-error")).toHaveText(
+    'Could not decode "Ridge panorama".',
+  );
+  await expect(page.locator("#game canvas")).toBeVisible();
+});
+
 test("a downloaded project can be reopened and exported as a playable browser file", async ({
   page,
 }, testInfo) => {
@@ -335,4 +365,27 @@ test("dock panels can be moved, resized, reopened, saved, and reset", async ({
   await expect
     .poll(async () => (await locate(inspector))!.x)
     .toBeCloseTo(initialInspector.x, 0);
+});
+
+test("right-clicking a panel can collapse it into the sidebar", async ({
+  page,
+}) => {
+  await editor(page);
+  await page
+    .locator(".dock-tab")
+    .filter({ hasText: /^Inspector$/ })
+    .click({ button: "right" });
+  await page.getByText("Collapse to Sidebar", { exact: true }).click();
+  const sidebar = page
+    .locator(".dv-edge-group")
+    .getByRole("tab", { name: "Inspector", exact: true });
+  await expect(sidebar).toBeVisible();
+  await sidebar.click();
+  await expect(page.getByLabel("Blueprint name")).toBeVisible();
+  await page.reload();
+  await expect(
+    page
+      .locator(".dv-edge-collapsed")
+      .getByRole("tab", { name: "Inspector", exact: true }),
+  ).toBeVisible();
 });
