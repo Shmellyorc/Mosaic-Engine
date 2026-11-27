@@ -44,7 +44,7 @@ import {
   X,
 } from "lucide-react";
 import { createProject } from "@mosaic/model";
-import { exampleProject } from "@mosaic/example";
+import { exampleProject, playableExamples } from "@mosaic/example";
 import type { Preference } from "@mosaic/render";
 import { BlueprintWorkspace, LibraryPanel } from "./blueprint";
 import {
@@ -132,11 +132,15 @@ function discard() {
     window.confirm("Replace the current project? Unsaved edits will be lost.")
   );
 }
-function loadExample() {
+function loadExample(create = exampleProject) {
   if (!discard()) return;
   resetProjectHandle();
-  useEditor.getState().load(exampleProject());
-  useEditor.setState({ workspace: "Blueprints", eventId: "update-event" });
+  useEditor.getState().load(create());
+  useEditor.setState(
+    create === exampleProject
+      ? { workspace: "Blueprints", eventId: "update-event" }
+      : { workspace: "Scene" },
+  );
 }
 function Assets() {
   return <AssetPanel onImport={image} />;
@@ -563,7 +567,16 @@ export function App() {
             {menuButton("Import Image", image)}
             {menuButton("Export Web Game", game)}
             <hr />
-            {menuButton("Open Lantern Ridge Sample", loadExample)}
+            {menuButton("Open Lantern Ridge Sample", () => loadExample())}
+            {playableExamples.map(({ id, name, create }) => (
+              <button
+                key={id}
+                data-menu-close
+                onClick={() => loadExample(create)}
+              >
+                Open {name}
+              </button>
+            ))}
           </Menu>
           <Menu label="Edit">
             <button

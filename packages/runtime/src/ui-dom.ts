@@ -329,6 +329,11 @@ export function mountGameUi(
   function update(active = true) {
     active = active && !editing;
     if (lastRevision === world.revision && interactive === active) return;
+    const focused = document.activeElement;
+    const focusedId =
+      focused instanceof HTMLElement && root.contains(focused)
+        ? focused.dataset.uiControl
+        : undefined;
     interactive = active;
     lastRevision = world.revision;
     const inert = !editing && !active;
@@ -369,8 +374,17 @@ export function mountGameUi(
     }
     if (active && requested !== world.focusRequest && world.focusRequest) {
       requested = world.focusRequest;
-      focus(requested.id);
+      if (focus(requested.id)) return;
     }
+    // A menu can close into a scene driven entirely by keyboard input.
+    if (
+      active &&
+      focusedId &&
+      !world.available(focusedId) &&
+      (document.activeElement === focused ||
+        document.activeElement === document.body)
+    )
+      host.closest<HTMLElement>("[tabindex]")?.focus({ preventScroll: true });
   }
   return {
     update,

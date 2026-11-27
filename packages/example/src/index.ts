@@ -1,3 +1,5 @@
+import { lanternCourierProject } from "./games/courier";
+import { beaconCircuitProject } from "./games/circuit";
 import {
   addWatchData,
   lanternWatchScene,
@@ -344,3 +346,17 @@ export function lanternWatchProject(): Project {
     startSceneId: LANTERN_WATCH_ID,
   };
 }
+
+export { lanternCourierProject, beaconCircuitProject };
+export const playableExamples = [
+  {
+    id: "lantern-courier",
+    name: "Lantern Courier",
+    create: lanternCourierProject,
+  },
+  {
+    id: "beacon-circuit",
+    name: "Beacon Circuit",
+    create: beaconCircuitProject,
+  },
+] as const;

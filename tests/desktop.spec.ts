@@ -213,6 +213,17 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await expect(
       page.getByText("Standalone game exported.", { exact: true }),
     ).toBeVisible();
+    await fileAction("Open Beacon Circuit");
+    await page.getByRole("button", { name: "Play", exact: true }).click();
+    const preview = page.getByRole("tabpanel", { name: "Game Preview" });
+    await preview
+      .getByRole("button", { name: "Beacon 5", exact: true })
+      .click();
+    await expect(
+      preview.getByRole("button", { name: "Next circuit" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+
     await electron.close();
     desktopOpen = false;
     const browser = await chromium.launch({ args: ["--disable-gpu"] });

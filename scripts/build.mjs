@@ -15,7 +15,7 @@ const sample = await build({
   absWorkingDir: root,
   stdin: {
     contents:
-      'export { exampleProject, workshopProject, signalLabProject, tradingPostProject, lanternWatchProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
+      'export { exampleProject, workshopProject, signalLabProject, tradingPostProject, lanternWatchProject, playableExamples } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts"; export { serializeProject } from "@mosaic/model";',
     resolveDir: root,
   },
   format: "esm",
@@ -31,7 +31,9 @@ const {
   signalLabProject,
   tradingPostProject,
   lanternWatchProject,
+  playableExamples,
   gameHtml,
+  serializeProject,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(sample.outputFiles[0].contents).toString("base64")}`
 );
@@ -72,6 +74,13 @@ await Promise.all([
     resolve(dist, "lantern-watch.html"),
     gameHtml(lanternWatchProject(), bundle),
   ),
+  ...playableExamples.flatMap(({ id, create }) => {
+    const project = create();
+    return [
+      writeFile(resolve(dist, id + ".html"), gameHtml(project, bundle)),
+      writeFile(resolve(dist, id + ".mosaic.json"), serializeProject(project)),
+    ];
+  }),
   copyFile(resolve(root, "LICENSE"), resolve(desktop, "LICENSE")),
   writeFile(
     resolve(desktop, "package.json"),

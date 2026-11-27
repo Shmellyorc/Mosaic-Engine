@@ -1,0 +1,199 @@
+import { strict as assert } from "node:assert";
+import { mkdir, writeFile } from "node:fs/promises";
+import { availableParallelism, cpus } from "node:os";
+import {
+  createBody,
+  createEmitter,
+  createEntity,
+  createLight,
+  createProject,
+  parseProject,
+  serializeProject,
+  type Tile,
+} from "@mosaic/model";
+import { Game, STEP } from "@mosaic/runtime";
+
+const shape = {
+  scenery: 16_000,
+  bodies: 128,
+  emitters: 64,
+  lights: 8,
+  tileWidth: 256,
+  tileHeight: 256,
+  warmUp: 90,
+  samples: 240,
+} as const;
+const limits = {
+  coldMs: 2000,
+  p95Ms: 50,
+  maxCandidateEntities: 2000,
+  residentChunksPerLayer: 32,
+  retainedHeapGrowthMiB: 32,
+};
+
+function fixture() {
+  const project = createProject("Large world qualification");
+  const scene = project.scenes[0];
+  const layer = scene.layers[0].id;
+  const color = "#516288";
+  const tiles: Tile[] = [];
+  for (let y = 0; y < shape.tileHeight; y++)
+    for (let x = 0; x < shape.tileWidth; x++)
+      if ((x + y) % 2 === 0) tiles.push({ x, y, color });
+  scene.tilemap = {
+    size: 16,
+    width: shape.tileWidth,
+    height: shape.tileHeight,
+    tiles: [],
+    layers: [
+      {
+        id: "ground",
+        name: "Ground",
+        layerId: layer,
+        opacity: 1,
+        visible: true,
+        collision: false,
+        navigation: true,
+        tiles,
+      },
+    ],
+  };
+  scene.lighting = { enabled: true, ambient: "#9da1bf" };
+  for (let i = 0; i < shape.scenery; i++) {
+    const entity = createEntity(layer);
+    entity.id = "prop-" + i;
+    entity.parentId = i > 0 && i % 11 === 0 ? "prop-" + (i - 1) : null;
+    Object.assign(entity.transform, {
+      x: (i % 160) * 30,
+      y: Math.floor(i / 160) * 30,
+      width: 12,
+      height: 12,
+      rotation: i % 9 === 0 ? 22 : 0,
+    });
+    scene.entities.push(entity);
+  }
+  for (let i = 0; i < shape.bodies; i++) {
+    const entity = createEntity(layer);
+    entity.id = "actor-" + i;
+    Object.assign(entity.transform, {
+      x: (i % 16) * 42,
+      y: 30 + Math.floor(i / 16) * 39,
+      width: 14,
+      height: 14,
+    });
+    entity.body = { ...createBody(14, 14), velocityX: 3 + (i % 4) };
+    if (i < shape.emitters)
+      entity.particles = { ...createEmitter(), rate: 20, seed: i + 10 };
+    if (i < shape.lights) entity.light = { ...createLight(), radius: 52 };
+    scene.entities.push(entity);
+  }
+  return { project, tiles: tiles.length };
+}
+function retainedHeap() {
+  globalThis.gc?.();
+  return process.memoryUsage().heapUsed / (1024 * 1024);
+}
+function rounded(value: number) {
+  return Number(value.toFixed(2));
+}
+function view(i: number) {
+  return { x: 320 + ((i * 19) % 2100), y: 180 + ((i * 7) % 800), zoom: 1 };
+}
+
+const { project, tiles } = fixture();
+const source = serializeProject(project);
+const parsingAt = performance.now();
+const parsed = parseProject(source);
+const parseMs = performance.now() - parsingAt;
+const coldAt = performance.now();
+const game = new Game(parsed);
+game.frame();
+const coldMs = performance.now() - coldAt;
+for (let i = 0; i < shape.warmUp; i++) {
+  game.advance(STEP);
+  game.frame(view(i));
+}
+const before = retainedHeap();
+const samples: number[] = [];
+let draws = 0,
+  digest = 0,
+  maxCandidateEntities = 0,
+  maxResidentChunks = 0;
+for (let i = 0; i < shape.samples; i++) {
+  const start = performance.now();
+  game.advance(STEP);
+  const count = game.frame(view(i)).draws.length;
+  samples.push(performance.now() - start);
+  draws += count;
+  digest = (Math.imul(digest, 31) + count) >>> 0;
+  const metrics = game.renderMetrics();
+  maxCandidateEntities = Math.max(maxCandidateEntities, metrics.candidates);
+  maxResidentChunks = Math.max(maxResidentChunks, metrics.chunks);
+}
+const retainedHeapGrowthMiB = retainedHeap() - before;
+const order = [...samples].sort((a, b) => a - b);
+const p95Ms = order[Math.ceil(samples.length * 0.95) - 1];
+const medianMs = order[Math.ceil(samples.length / 2) - 1];
+const finalX = game.getEntity("actor-0")!.transform.x;
+const report = {
+  environment: {
+    node: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    cpu: cpus()[0]?.model,
+    logicalCpuAvailable: availableParallelism(),
+  },
+  scene: { ...shape, tiles, serializedBytes: Buffer.byteLength(source) },
+  timingMs: {
+    parse: rounded(parseMs),
+    cold: rounded(coldMs),
+    median: rounded(medianMs),
+    p95: rounded(p95Ms),
+    worst: rounded(order.at(-1)!),
+  },
+  retainedHeapMiB: {
+    afterWarmUp: rounded(before),
+    growth: rounded(retainedHeapGrowthMiB),
+  },
+  output: {
+    draws,
+    digest,
+    maxCandidateEntities,
+    maxResidentChunks,
+    actorTravel: rounded(finalX),
+    ticks: Math.round(game.time / STEP),
+  },
+  limits,
+};
+await mkdir("dist", { recursive: true });
+await writeFile(
+  "dist/qualification.json",
+  JSON.stringify(report, null, 2) + "\n",
+);
+console.log(JSON.stringify(report, null, 2));
+assert.equal(report.output.ticks, shape.warmUp + shape.samples);
+assert.equal(
+  game.logs.length,
+  0,
+  "The fixture should run without runtime faults.",
+);
+assert(
+  draws > shape.samples * 300,
+  "The moving camera should traverse inhabited chunks.",
+);
+assert(finalX > 10, "Active bodies should advance during the test.");
+assert(
+  maxCandidateEntities > 0 &&
+    maxCandidateEntities <= limits.maxCandidateEntities,
+  "Spatial candidate budget exceeded.",
+);
+assert(
+  maxResidentChunks > 0 && maxResidentChunks <= limits.residentChunksPerLayer,
+  "Tile chunk budget exceeded.",
+);
+assert(coldMs <= limits.coldMs, "Cold start budget exceeded.");
+assert(p95Ms <= limits.p95Ms, "Simulation and draw-list p95 budget exceeded.");
+assert(
+  retainedHeapGrowthMiB <= limits.retainedHeapGrowthMiB,
+  "Retained heap grew beyond the qualification budget.",
+);

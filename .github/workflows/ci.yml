@@ -22,6 +22,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - run: npm run qualify
       - run: npx playwright install --with-deps chromium
       - run: npm run package
       - name: Test browser and packaged desktop
@@ -60,6 +61,21 @@ jobs:
           name: lantern-watch-web
           path: dist/lantern-watch.html
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playable-example-games
+          path: |
+            dist/lantern-courier.html
+            dist/lantern-courier.mosaic.json
+            dist/beacon-circuit.html
+            dist/beacon-circuit.mosaic.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: performance-qualification
+          path: dist/qualification.json
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:

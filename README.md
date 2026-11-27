@@ -27,6 +27,15 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 
 Open **File → Open Lantern Ridge Sample** for a self-contained example. Move the lantern keeper with A/D or the arrow keys. The project demonstrates camera follow, a spritesheet with idle and walking clips, and a screen-space HUD. The Lookout Lamp demonstrates a timed loop, a typed scene event, and a reusable function. Sample art is original to this repository and covered by the LICENSE.
 
+## Play the example games
+
+Use **File → Open Lantern Courier** or **File → Open Beacon Circuit**, then press **Play** and use the Game Preview. Each game is an editable Mosaic project with its rules in the same Blueprint editor.
+
+- **Lantern Courier** is a timed delivery through an alternating route. Move with WASD or the arrow keys, collect stamps 1, 2, and 3 in order, and reach the green gate before time runs out. The patrols can end a run early. The game saves the fastest successful delivery in the Personal Best slot.
+- **Beacon Circuit** is a three-board logic puzzle. Click a beacon or navigate with the arrow keys and press Enter. Each switch flips itself and its orthogonal neighbors. Light all nine beacons to advance. Reset board restores the current pattern and keeps the running move count. The game saves the fewest moves for a full clear.
+
+The build writes `dist/lantern-courier.html` and `dist/beacon-circuit.html` for offline play, plus matching `.mosaic.json` documents for authoring. The HTML player offers both renderers and an **Enable audio** control. CI publishes the four files together in the **playable-example-games** artifact.
+
 ## Blueprint execution
 
 - Use **Functions** in the Inspector to define parameters and a return type. **Call Function** passes typed arguments and can store the result in a variable. **Declare Local** scopes a value to the rest of its stack and its nested blocks. Entity variables retain one value per runtime entity.
@@ -122,12 +131,13 @@ A Mosaic project folder contains a versioned `project.mosaic.json` file. The fil
 | `packages/blueprints` | Typed AST, compiler and block diagnostics                                      |
 | `packages/runtime`    | Entity state, fixed 60 Hz simulation, motion, effects, audio and draw commands |
 | `packages/render`     | PixiJS, Canvas 2D and backend selection                                        |
-| `packages/example`    | Lantern Ridge project and assets                                               |
+| `packages/example`    | Lantern Ridge, complete example games, and shared art and audio                |
 
 ```sh
 npm run typecheck
 npm run lint
 npm test
+npm run qualify
 npm run build
 npm run release:package
 npx playwright install chromium
@@ -137,5 +147,7 @@ npm run smoke
 The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, `dist/ridge-trading-post.html`, and `dist/lantern-watch.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Run `npm run release:archive` after packaging to create a `tar.gz`, SHA-256 checksum, and JSON manifest in `dist/`. The release archives are for development and testing. Public installers and macOS notarization require distribution credentials.
 
 Browser and packaged desktop smoke tests require a graphical session. On Linux, use `xvfb-run --auto-servernum npm run smoke`. CI runs the browser suite, including PixiJS and Canvas 2D parity, and launches the packaged editor on Linux x64, Windows x64, and macOS arm64. Each native job checks project creation, asset import, save and reopen, and offline HTML export. Download the native archives, checksums, manifests, and sample HTML files from a successful run. [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml)
+
+**Performance qualification** builds a repeatable large-world fixture with 16,000 scenery entities, 128 moving bodies, 64 particle emitters, and 32,768 tiles. It measures project parse time, the first draw list, 240 simulation and draw-list samples, and post-GC heap growth. It checks the spatial candidate and tile residency limits alongside frame-time and heap budgets for the fixture. The command writes `dist/qualification.json`, which CI uploads as **performance-qualification**.
 
 MIT licensed.

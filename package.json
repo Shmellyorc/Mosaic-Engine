@@ -20,6 +20,7 @@
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "qualify": "node --expose-gc scripts/qualify.mjs",
     "smoke": "playwright test"
   },
   "devDependencies": {
