@@ -1,11 +1,23 @@
 import {
   compileBlueprint,
+  displayValue,
+  typeOf,
+  type Blueprint,
+  type Signal,
   type BlueprintContext,
   type Diagnostic,
   type Property,
   type Value,
 } from "@mosaic/blueprints";
-import type { Entity, Frame, Project, Scene } from "@mosaic/model";
+import {
+  emptySignals,
+  type Entity,
+  type Frame,
+  type Project,
+  type Scene,
+} from "@mosaic/model";
+import { BlueprintScheduler, type Binding } from "./blueprints";
+export type { BlueprintPause } from "./blueprints";
 
 export const STEP = 1 / 60;
 export type Matrix2D = {
@@ -142,14 +154,33 @@ export class Game {
   readonly input: InputState;
   readonly logs: RuntimeLog[] = [];
   readonly scene: Scene;
-  readonly activeBlocks = new Set<string>();
+  private scheduler: BlueprintScheduler;
   private reported = new Set<string>();
   private world = new Map<string, WorldEntity>();
+  private assets: Set<string>;
   private entities: WorldEntity[];
-  private program: {
-    context: BlueprintContext;
-    run: ReturnType<typeof compileBlueprint>["run"];
-  }[] = [];
+  private program: Binding[] = [];
+  private documents = new Map<string, Blueprint>();
+  private signals: readonly Signal[];
+  private tickPending = false;
+  get activeBlocks() {
+    return this.scheduler.activeBlocks;
+  }
+  get blueprintPause() {
+    return this.scheduler.pauseDetails;
+  }
+  setBreakpoints(breakpoints: Map<string, ReadonlySet<string>>) {
+    this.scheduler.breakpoints = breakpoints;
+  }
+  resumeBlueprints() {
+    this.scheduler.pump("resume");
+    this.finishTick();
+  }
+  stepBlueprint() {
+    if (!this.scheduler.paused && !this.tickPending) this.beginTick();
+    this.scheduler.pump("step");
+    this.finishTick();
+  }
   private started = false;
   private accumulator = 0;
   private tiles = new Map<number, Scene["tilemap"]["tiles"][number]>();
@@ -158,7 +189,7 @@ export class Game {
   constructor(
     readonly project: Project,
     sceneId = project.startSceneId,
-    private debug = false,
+    debug = false,
   ) {
     const scene = project.scenes.find((entry) => entry.id === sceneId);
     if (!scene) throw new Error("Scene could not be found.");
@@ -166,13 +197,9 @@ export class Game {
     this.input = new InputState(project.input);
     for (const cell of scene.tilemap.tiles)
       this.tiles.set(cell.y * scene.tilemap.width + cell.x, cell);
-    const axes = new Set(project.input.map((axis) => axis.id));
-    const blueprints = new Map(
-      project.blueprints.map((blueprint) => [
-        blueprint.id,
-        compileBlueprint(blueprint, axes),
-      ]),
-    );
+    this.scheduler = new BlueprintScheduler(STEP, debug);
+    this.assets = new Set(project.assets.map((asset) => asset.id));
+    this.signals = project.signals ?? emptySignals;
     const layerOrder = new Map(
       scene.layers.map((layer, index) => [layer.id, index]),
     );
@@ -183,23 +210,79 @@ export class Game {
     );
     this.entities = sorted.map((source) => {
       const entity = structuredClone(source);
-      const compiled = entity.blueprintId
-        ? blueprints.get(entity.blueprintId)
-        : undefined;
       const state: WorldEntity = {
         entity,
-        variables: compiled?.createVariables() ?? new Map(),
+        variables: new Map(),
         clip: null,
         elapsed: 0,
       };
       this.world.set(entity.id, state);
-      if (compiled) {
-        for (const diagnostic of compiled.diagnostics)
-          this.fault(entity.id, diagnostic);
-        this.program.push({ run: compiled.run, context: this.context(state) });
-      }
       return state;
     });
+    this.reloadBlueprints(project.blueprints, this.signals);
+  }
+
+  reloadBlueprints(
+    blueprints: Blueprint[],
+    signals: readonly Signal[] = this.signals,
+  ) {
+    const documents = new Map(
+      blueprints.map((blueprint) => [blueprint.id, blueprint]),
+    );
+    const previous = new Map(
+      this.program.map((binding) => [binding.id, binding]),
+    );
+    const changed = new Set<Binding>();
+    const axes = new Set(this.project.input.map((axis) => axis.id));
+    const compiled = new Map<string, Binding["program"]>();
+    const sameSignals = signals === this.signals;
+    this.program = this.entities.flatMap((state) => {
+      const id = state.entity.blueprintId;
+      const old = previous.get(state.entity.id);
+      const definition = id && documents.get(id);
+      if (
+        old &&
+        sameSignals &&
+        definition &&
+        definition === this.documents.get(definition.id)
+      )
+        return [old];
+      if (old) {
+        changed.add(old);
+        for (const key of this.reported)
+          if (key.startsWith(JSON.stringify(state.entity.id) + "|"))
+            this.reported.delete(key);
+      }
+      if (!definition) {
+        state.variables = new Map();
+        return [];
+      }
+      let program = compiled.get(definition.id);
+      if (!program) {
+        program = compileBlueprint(definition, axes, signals);
+        compiled.set(definition.id, program);
+      }
+      const variables = program.createVariables();
+      for (const [key, initial] of variables) {
+        const value = state.variables.get(key);
+        if (value !== undefined && typeOf(value) === typeOf(initial))
+          variables.set(key, value);
+      }
+      state.variables = variables;
+      for (const diagnostic of program.diagnostics)
+        this.fault(state.entity.id, diagnostic);
+      return [
+        {
+          id: state.entity.id,
+          blueprintId: definition.id,
+          program,
+          context: this.context(state),
+        },
+      ];
+    });
+    this.documents = documents;
+    this.signals = signals;
+    this.scheduler.configure(this.program, changed);
   }
 
   private context(state: WorldEntity): BlueprintContext {
@@ -211,7 +294,30 @@ export class Game {
         this.set(entity, "x", entity.transform.x + x * STEP);
         this.set(entity, "y", entity.transform.y + y * STEP);
       },
-      set: (property, value) => this.set(entity, property, value),
+      set: (property, value, target) =>
+        this.set(this.target(entity, target), property, value),
+      get: (property, target) => {
+        const object = this.target(entity, target);
+        if (property === "visible") return object.visible;
+        if (property === "text") {
+          if (object.visual?.kind !== "text")
+            throw new Error("The entity has no text component.");
+          return object.visual.text;
+        }
+        return object.transform[property];
+      },
+      query: (query) =>
+        query === "scene"
+          ? this.scene.name
+          : {
+              kind: "entity",
+              id: query === "self" ? entity.id : (entity.parentId ?? ""),
+            },
+      exists: (reference) =>
+        typeof reference === "object" &&
+        ((reference.kind === "entity" && this.world.has(reference.id)) ||
+          (reference.kind === "asset" && this.assets.has(reference.id))),
+      emit: (id, value) => this.scheduler.emit(id, value),
       animate: (clip) => {
         if (state.clip === clip) return;
         if (entity.visual?.kind !== "sprite")
@@ -226,15 +332,18 @@ export class Game {
           level: "info",
           entityId: entity.id,
           blockId,
-          message: String(value),
+          message: displayValue(value),
         }),
       fault: (diagnostic) => this.fault(entity.id, diagnostic),
-      trace: this.debug
-        ? (id) => {
-            this.activeBlocks.add(id);
-          }
-        : undefined,
     };
+  }
+
+  private target(entity: Entity, id?: string) {
+    if (id === undefined) return entity;
+    const target = this.world.get(id);
+    if (!target)
+      throw new Error("The target entity is absent from this scene.");
+    return target.entity;
   }
 
   private set(entity: Entity, property: Property, value: Value) {
@@ -262,7 +371,8 @@ export class Game {
     this.logs.push(entry);
   }
   private fault(entityId: string, { blockId, message }: Diagnostic) {
-    const key = JSON.stringify([entityId, blockId, message]);
+    const key =
+      JSON.stringify(entityId) + "|" + JSON.stringify([blockId, message]);
     if (this.reported.has(key)) return;
     this.reported.add(key);
     this.log({ level: "error", entityId, blockId, message });
@@ -271,19 +381,35 @@ export class Game {
   start() {
     if (this.started) return;
     this.started = true;
-    for (const { run, context } of this.program) run("start", context);
+    this.scheduler.start(this.program);
+  }
+  private beginTick() {
+    this.tickPending = true;
+    this.scheduler.nextTick();
+  }
+  private finishTick() {
+    if (this.scheduler.paused || !this.tickPending) return;
+    this.tickPending = false;
+    for (const state of this.entities) if (state.clip) state.elapsed += STEP;
+    this.time += STEP;
   }
   advance(seconds: number) {
     if (!Number.isFinite(seconds) || seconds < 0) return;
     this.start();
+    if (this.scheduler.paused) return;
+    this.scheduler.pump();
+    this.finishTick();
+    if (this.scheduler.paused) return;
     this.accumulator += Math.min(seconds, 0.15);
-    let steps = 0;
     while (this.accumulator + 1e-10 >= STEP) {
-      if (!steps++) this.activeBlocks.clear();
-      for (const { run, context } of this.program) run("update", context);
-      for (const state of this.entities) if (state.clip) state.elapsed += STEP;
-      this.time += STEP;
       this.accumulator -= STEP;
+      this.beginTick();
+      this.scheduler.pump();
+      this.finishTick();
+      if (this.scheduler.paused) {
+        this.accumulator = 0;
+        break;
+      }
     }
   }
   getEntity(id: string) {

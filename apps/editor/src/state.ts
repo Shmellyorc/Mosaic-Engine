@@ -10,7 +10,7 @@ import {
 } from "@mosaic/model";
 import type { Blueprint, Value } from "@mosaic/blueprints";
 import type { Preference } from "@mosaic/render";
-import type { RuntimeLog } from "@mosaic/runtime";
+import type { BlueprintPause, RuntimeLog } from "@mosaic/runtime";
 import type { ProjectLocation } from "../../desktop/src/contracts";
 
 export const workspaces = [
@@ -29,6 +29,7 @@ type Snapshot = {
   logs: RuntimeLog[];
   time: number;
   position?: { x: number; y: number };
+  pause?: BlueprintPause;
 };
 const emptySnapshot: Snapshot = {
   blocks: [],
@@ -37,6 +38,26 @@ const emptySnapshot: Snapshot = {
   time: 0,
 };
 const project = exampleProject();
+type Breakpoints = Record<string, string[]>;
+function breakpointKey(projectId: string) {
+  return "mosaic-breakpoints:" + projectId;
+}
+function readBreakpoints(projectId: string): Breakpoints {
+  try {
+    const value: unknown = JSON.parse(
+      localStorage.getItem(breakpointKey(projectId)) ?? "{}",
+    );
+    if (!value || typeof value !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(value).filter(
+        ([, ids]) =>
+          Array.isArray(ids) && ids.every((id) => typeof id === "string"),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
 type EditorState = {
   project: Project;
   past: Project[];
@@ -53,6 +74,8 @@ type EditorState = {
   runId: number;
   preference: Preference;
   snapshot: Snapshot;
+  breakpoints: Breakpoints;
+  toggleBreakpoint(blueprintId: string, blockId: string): void;
   messages: RuntimeLog[];
   edit(recipe: (project: Project) => void): void;
   undo(): void;
@@ -86,6 +109,22 @@ export const useEditor = create<EditorState>((set) => ({
         ? "pixi"
         : "auto",
   snapshot: emptySnapshot,
+  breakpoints: readBreakpoints(project.id),
+  toggleBreakpoint: (blueprintId, blockId) =>
+    set((state) => {
+      const ids = Object.hasOwn(state.breakpoints, blueprintId)
+        ? state.breakpoints[blueprintId]
+        : [];
+      const toggled = ids.includes(blockId)
+        ? ids.filter((id) => id !== blockId)
+        : [...ids, blockId];
+      const breakpoints = { ...state.breakpoints, [blueprintId]: toggled };
+      localStorage.setItem(
+        breakpointKey(state.project.id),
+        JSON.stringify(breakpoints),
+      );
+      return { breakpoints };
+    }),
   messages: [],
   edit: (recipe) =>
     set((state) => {
@@ -131,6 +170,7 @@ export const useEditor = create<EditorState>((set) => ({
           .find((scene) => scene.id === next.startSceneId)
           ?.entities.find((entity) => entity.blueprintId)?.id ?? null,
       blueprintId: next.blueprints[0]?.id ?? null,
+      breakpoints: readBreakpoints(next.id),
       eventId: null,
       selectedTile: null,
       transport: "editing",
@@ -201,7 +241,10 @@ export function editBlueprint(recipe: (blueprint: Blueprint) => void) {
     const blueprint = project.blueprints.find(
       (blueprint) => blueprint.id === id,
     );
-    if (blueprint) recipe(blueprint);
+    if (blueprint) {
+      blueprint.version = 2;
+      recipe(blueprint);
+    }
   });
 }
 export function chooseScene(sceneId: string) {

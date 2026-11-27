@@ -377,3 +377,170 @@ test("right-clicking a panel can collapse it into the sidebar", async ({
       .getByRole("tab", { name: "Inspector", exact: true }),
   ).toBeVisible();
 });
+
+test("authors a function and timed event loop, steps through it, and exports the visible result", async ({
+  page,
+  context,
+}, testInfo) => {
+  await editor(page);
+  const inspector = page.locator(".inspector");
+  const canvas = page.locator(".blueprint-canvas");
+  const root = canvas.getByLabel("Add block", { exact: true });
+  const entry = canvas.getByLabel("Blueprint event");
+  const card = (label: string) =>
+    canvas
+      .locator(".logic-card")
+      .filter({
+        has: page.getByRole("button", { name: label, exact: true }),
+      })
+      .last();
+  async function setExpression(label: string, source: string) {
+    const button = canvas.getByRole("button", {
+      name: "Edit " + label,
+      exact: true,
+    });
+    await button.click();
+    const editor = button.locator("..");
+    await editor.getByText("Enter expression", { exact: true }).click();
+    const input = editor.getByLabel(label + " expression", { exact: true });
+    await input.fill(source);
+    await input.press("Enter");
+    await expect(editor.getByRole("alert")).toHaveCount(0);
+    await button.click();
+  }
+  await inspector
+    .getByRole("button", { name: "Function", exact: true })
+    .click();
+  await inspector.getByLabel("Function name").fill("Increase");
+  await inspector.getByLabel("Function name").press("Enter");
+  await inspector.getByLabel("Return type").selectOption("number");
+  await inspector
+    .getByRole("button", { name: "Parameter", exact: true })
+    .click();
+  await inspector.getByLabel("Parameter name").fill("amount");
+  await inspector.getByLabel("Parameter name").press("Enter");
+  await root.selectOption("return");
+  await setExpression("Return value", "amount + 10");
+  await expect(
+    canvas.getByRole("button", { name: "Edit Return value" }),
+  ).toContainText("amount");
+
+  await inspector.getByText("Scene Events", { exact: true }).click();
+  await inspector
+    .getByRole("button", { name: "Scene Event", exact: true })
+    .click();
+  const eventName = inspector.getByLabel("Scene event name").last();
+  await eventName.fill("Title Ready");
+  await eventName.press("Enter");
+  await inspector
+    .getByLabel("Event payload type")
+    .last()
+    .selectOption("boolean");
+  await inspector
+    .getByLabel("Add event handler")
+    .selectOption({ label: "Title Ready" });
+  await root.selectOption("property");
+  await card("Set Property").getByLabel("Target mode").selectOption("entity");
+  await setExpression("Target entity", 'entity("title")');
+  await setExpression("Property value", "payload");
+
+  await entry.selectOption({ label: "On Start" });
+  await root.selectOption("repeat");
+  await card("Repeat").getByLabel("Add block to body").selectOption("call");
+  await card("Call Function")
+    .getByLabel("Function result variable")
+    .selectOption({ label: "speed" });
+  await setExpression("Argument amount", "2");
+  await card("Repeat").getByLabel("Add block to body").selectOption("wait");
+  await root.selectOption("emit");
+  await card("Emit Event")
+    .getByLabel("Event to emit")
+    .selectOption({ label: "Title Ready" });
+  await setExpression("Event payload", "false");
+  await expect(page.getByText("✓ Valid", { exact: true })).toBeVisible();
+
+  await card("Call Function")
+    .locator(":scope > header")
+    .getByRole("button", { name: "Set breakpoint" })
+    .click();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(page.getByTestId("blueprint-pause")).toContainText("On Start");
+  await expect(card("Call Function")).toHaveClass(/debug-paused/);
+  await page.getByRole("button", { name: "Step Block", exact: true }).click();
+  await expect(page.getByTestId("blueprint-pause")).toContainText("Increase");
+  await expect(card("Return")).toHaveClass(/debug-paused/);
+  await expect(
+    page.getByRole("row").filter({ hasText: "amount" }),
+  ).toContainText("2");
+  await entry.selectOption({ label: "On Start" });
+  await card("Call Function")
+    .locator(":scope > header")
+    .getByRole("button", { name: "Remove breakpoint" })
+    .click();
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(
+    page.getByRole("row").filter({ hasText: "speed" }),
+  ).toContainText("12");
+
+  const projectDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  const saved = parseProject(
+    await readFile((await (await projectDownload).path())!, "utf8"),
+  );
+  expect(
+    saved.signals?.find((signal) => signal.name === "Title Ready"),
+  ).toMatchObject({
+    name: "Title Ready",
+    type: "boolean",
+  });
+  expect(saved.blueprints[0]).toMatchObject({
+    version: 2,
+    functions: [
+      {
+        name: "Increase",
+        returns: "number",
+        parameters: [{ name: "amount", type: "number" }],
+      },
+    ],
+  });
+  const gameDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const output = testInfo.outputPath("title-ready.html");
+  await (await gameDownload).saveAs(output);
+
+  await context.setOffline(true);
+  const player = await context.newPage();
+  await player.goto(pathToFileURL(output).href);
+  await expect(player.locator("#game-title")).toHaveText("Lantern Ridge");
+  await player.locator("#backend").selectOption("canvas");
+  await expect(player.locator("#runtime-status")).toHaveText("Canvas 2D");
+  const image = player.locator("#game canvas");
+  await expect(image).toBeVisible();
+  await expect
+    .poll(() =>
+      image.evaluate((canvas: HTMLCanvasElement) => {
+        const scale = Math.min(canvas.width / 640, canvas.height / 360);
+        const left = (canvas.width - 640 * scale) / 2;
+        const top = (canvas.height - 360 * scale) / 2;
+        const ctx = canvas.getContext("2d")!;
+        const scan = (y: number, height: number) => {
+          const pixels = ctx.getImageData(
+            left + 20 * scale,
+            top + y * scale,
+            260 * scale,
+            height * scale,
+          ).data;
+          return pixels.some(
+            (red, offset) =>
+              offset % 4 === 0 &&
+              red > 220 &&
+              pixels[offset + 1] > 175 &&
+              pixels[offset + 2] > 100,
+          );
+        };
+        return { title: scan(20, 30), controls: scan(52, 20) };
+      }),
+    )
+    .toEqual({ title: false, controls: true });
+  await player.close();
+});

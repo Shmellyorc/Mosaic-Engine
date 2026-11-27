@@ -11,12 +11,34 @@ import {
   Plus,
   Settings2,
   Terminal,
-  Variable,
+  Variable as VariableIcon,
   Zap,
+  Circle,
+  Clock3,
+  Repeat2,
+  Radio,
+  ArrowUpRight,
 } from "lucide-react";
-import { useMemo, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import {
   compileBlueprint,
+  children as blockChildren,
+  displayValue,
+  parseExpression,
+  typeOf,
+  type Branch,
+  type BlueprintEvent,
+  type BlueprintFunction,
+  type Signal,
+  type Variable,
   defaultValue,
   literal,
   propertyTypes,
@@ -25,24 +47,29 @@ import {
   type Blueprint,
   type Expression,
   type Property,
-  type Value,
   type ValueType,
 } from "@mosaic/blueprints";
-import { createBlueprint, newId, type Project } from "@mosaic/model";
+import {
+  createBlueprint,
+  emptySignals,
+  newId,
+  type Project,
+} from "@mosaic/model";
 import {
   editBlueprint,
   selectedBlueprint,
   selectedEntity,
   useEditor,
 } from "./state";
-import { Field, NumberField, Section, TextField } from "./controls";
+import { Field, Section, TextField } from "./controls";
+import { TypeOptions, ValueControl } from "./blueprint-values";
 
 const kinds = {
   set: {
     name: "Set Variable",
     description: "Store a typed value for this entity.",
     tone: "blue",
-    Icon: Variable,
+    Icon: VariableIcon,
   },
   if: {
     name: "If",
@@ -50,6 +77,60 @@ const kinds = {
       "Run one of two nested sequences when a condition is evaluated.",
     tone: "blue",
     Icon: GitBranch,
+  },
+  let: {
+    name: "Declare Local",
+    description: "Declare a typed variable for the rest of this stack.",
+    tone: "blue",
+    Icon: VariableIcon,
+  },
+  repeat: {
+    name: "Repeat",
+    description: "Run a nested stack a fixed number of times.",
+    tone: "blue",
+    Icon: Repeat2,
+  },
+  while: {
+    name: "While",
+    description: "Run a nested stack as long as a condition remains true.",
+    tone: "blue",
+    Icon: Repeat2,
+  },
+  break: {
+    name: "Break",
+    description: "Exit the nearest loop.",
+    tone: "neutral",
+    Icon: ArrowUpRight,
+  },
+  continue: {
+    name: "Continue",
+    description: "Start the next iteration of the nearest loop.",
+    tone: "neutral",
+    Icon: Repeat2,
+  },
+  call: {
+    name: "Call Function",
+    description: "Run a reusable typed stack and optionally store its result.",
+    tone: "purple",
+    Icon: Code2,
+  },
+  return: {
+    name: "Return",
+    description: "Finish the current function.",
+    tone: "purple",
+    Icon: ArrowUpRight,
+  },
+  emit: {
+    name: "Emit Event",
+    description: "Send a typed event to listeners in this scene.",
+    tone: "purple",
+    Icon: Radio,
+  },
+  wait: {
+    name: "Wait",
+    description: "Pause this stack for simulation time.",
+    tone: "blue",
+    Icon: Clock3,
   },
   move: {
     name: "Move",
@@ -77,7 +158,6 @@ const kinds = {
   },
 } as const;
 type BlockKind = keyof typeof kinds;
-type Branch = "then" | "else";
 type ListAddress = { eventId: string; parentId?: string; branch?: Branch };
 type Match = { blocks: Block[]; index: number; block: Block };
 const operators: Record<Binary, string> = {
@@ -85,6 +165,9 @@ const operators: Record<Binary, string> = {
   "-": "−",
   "*": "×",
   "/": "÷",
+  "%": "%",
+  "<=": "≤",
+  ">=": "≥",
   "==": "=",
   "!=": "≠",
   "<": "<",
@@ -105,23 +188,83 @@ function findBlock(blocks: Block[], id: string): Match | undefined {
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index];
     if (block.id === id) return { blocks, index, block };
-    if (block.kind === "if") {
-      const found = findBlock(block.then, id) ?? findBlock(block.else, id);
+    for (const { blocks } of blockChildren(block)) {
+      const found = findBlock(blocks, id);
       if (found) return found;
     }
   }
 }
+type Entry = BlueprintEvent | BlueprintFunction;
+function entries(blueprint: Blueprint): Entry[] {
+  return [...blueprint.events, ...(blueprint.functions ?? [])];
+}
+function activeEvent(blueprint: Blueprint, eventId: string | null) {
+  return (
+    entries(blueprint).find((entry) => entry.id === eventId) ??
+    blueprint.events[0] ??
+    blueprint.functions?.[0]
+  );
+}
+function entryName(entry: Entry, signals: readonly Signal[]): string {
+  if ("parameters" in entry) return entry.name;
+  if (entry.kind === "start") return "On Start";
+  if (entry.kind === "update") return "Update (Every Frame)";
+  return (
+    signals.find((signal) => signal.id === entry.signalId)?.name ??
+    "Missing event"
+  );
+}
 function getBlocks(blueprint: Blueprint, address: ListAddress) {
-  const event = blueprint.events.find((event) => event.id === address.eventId);
-  const parent =
-    address.parentId &&
-    event &&
-    findBlock(event.blocks, address.parentId)?.block;
-  return address.parentId
-    ? parent && parent.kind === "if" && address.branch
-      ? parent[address.branch]
-      : undefined
-    : event?.blocks;
+  const entry = entries(blueprint).find(
+    (entry) => entry.id === address.eventId,
+  );
+  if (!address.parentId || !entry) return entry?.blocks;
+  const parent = findBlock(entry.blocks, address.parentId)?.block;
+  return (
+    parent &&
+    blockChildren(parent).find((child) => child.branch === address.branch)
+      ?.blocks
+  );
+}
+function variablesAt(
+  blueprint: Blueprint,
+  address: ListAddress,
+  signals: readonly Signal[],
+  before?: string,
+): Variable[] {
+  const entry = entries(blueprint).find(
+    (entry) => entry.id === address.eventId,
+  );
+  const variables: Variable[] = [...blueprint.variables];
+  if (!entry) return variables;
+  if ("parameters" in entry) variables.push(...entry.parameters);
+  else if (entry.kind === "signal") {
+    const signal = signals.find((signal) => signal.id === entry.signalId);
+    if (signal && signal.type !== "void")
+      variables.push({ id: entry.id, name: "payload", type: signal.type });
+  }
+  function walk(blocks: Block[], current: Variable[]): Variable[] | undefined {
+    for (const block of blocks) {
+      if (block.id === before) return current;
+      if (block.kind === "let")
+        current.push({ id: block.id, name: block.name, type: block.type });
+      for (const child of blockChildren(block)) {
+        if (
+          !before &&
+          block.id === address.parentId &&
+          child.branch === address.branch
+        ) {
+          const inner = [...current];
+          return walk(child.blocks, inner) ?? inner;
+        }
+        const found = walk(child.blocks, [...current]);
+        if (found) return found;
+      }
+    }
+    if (!before && blocks === entry!.blocks && !address.parentId)
+      return current;
+  }
+  return walk(entry.blocks, variables) ?? variables;
 }
 function changeBlock(
   address: ListAddress,
@@ -136,10 +279,13 @@ function changeBlock(
 function makeBlock(
   kind: BlockKind,
   blueprint: Blueprint,
+  variables: Variable[],
+  signals: readonly Signal[],
+  entry: Entry | undefined,
   clip?: string,
 ): Block {
   const id = newId();
-  const firstVariable = blueprint.variables[0];
+  const firstVariable = variables[0];
   switch (kind) {
     case "set":
       return {
@@ -150,6 +296,52 @@ function makeBlock(
       };
     case "if":
       return { id, kind, condition: literal(true), then: [], else: [] };
+    case "let":
+      return { id, kind, name: "local", type: "number", value: literal(0) };
+    case "repeat":
+      return { id, kind, count: literal(3), body: [] };
+    case "while":
+      return { id, kind, condition: literal(false), body: [] };
+    case "break":
+    case "continue":
+      return { id, kind };
+    case "wait":
+      return { id, kind, seconds: literal(0.25) };
+    case "call": {
+      const fn = blueprint.functions?.[0];
+      return {
+        id,
+        kind,
+        functionId: fn?.id ?? "unassigned",
+        args: Object.fromEntries(
+          (fn?.parameters ?? []).map((p) => [
+            p.id,
+            literal(defaultValue[p.type]),
+          ]),
+        ),
+      };
+    }
+    case "return": {
+      const returns = entry && "parameters" in entry && entry.returns;
+      return {
+        id,
+        kind,
+        ...(returns && returns !== "void"
+          ? { value: literal(defaultValue[returns]) }
+          : {}),
+      };
+    }
+    case "emit": {
+      const signal = signals[0];
+      return {
+        id,
+        kind,
+        signalId: signal?.id ?? "unassigned",
+        ...(signal && signal.type !== "void"
+          ? { value: literal(defaultValue[signal.type]) }
+          : {}),
+      };
+    }
     case "move":
       return { id, kind, x: literal(0), y: literal(0) };
     case "animate":
@@ -160,25 +352,25 @@ function makeBlock(
       return { id, kind, value: literal("Hello from Mosaic") };
   }
 }
-function activeEvent(blueprint: Blueprint, eventId: string | null) {
-  return (
-    blueprint.events.find((event) => event.id === eventId) ??
-    blueprint.events[0]
-  );
-}
 function addBlock(kind: BlockKind, address?: ListAddress) {
   const state = useEditor.getState();
   const blueprint = selectedBlueprint(state);
   if (!blueprint) return;
   const event = activeEvent(blueprint, state.eventId);
   if (!address && !event) return;
+  const target = address ?? { eventId: event!.id };
+  const signals = state.project.signals ?? emptySignals;
   const block = makeBlock(
     kind,
     blueprint,
+    variablesAt(blueprint, target, signals),
+    signals,
+    entries(blueprint).find((entry) => entry.id === target.eventId),
     selectedEntity(state)?.clips[0]?.name,
   );
   editBlueprint((draft) => {
-    getBlocks(draft, address ?? { eventId: event.id })?.push(block);
+    draft.version = 2;
+    getBlocks(draft, target)?.push(block);
   });
   useEditor.setState({ selectedTile: block.id });
 }
@@ -198,49 +390,15 @@ type ExprProps = {
   expr: Expression;
   label: string;
   expected?: ValueType;
-  blueprint: Blueprint;
+  variables: Variable[];
   axes: Project["input"];
   change: (expr: Expression) => void;
 };
-function ValueControl({
-  label,
-  value,
-  change,
-}: {
-  label: string;
-  value: Value;
-  change: (value: Value) => void;
-}) {
-  if (typeof value === "number")
-    return (
-      <NumberField label={label} value={value} onChange={change} step={0.1} />
-    );
-  if (typeof value === "boolean")
-    return (
-      <select
-        aria-label={label}
-        value={String(value)}
-        onChange={(event) => change(event.target.value === "true")}
-      >
-        <option value="true">True</option>
-        <option value="false">False</option>
-      </select>
-    );
-  return (
-    <TextField
-      label={label}
-      value={value}
-      onChange={change}
-      allowEmpty
-      maxLength={300}
-    />
-  );
-}
 function ExpressionControl({
   expr,
   label,
   expected,
-  blueprint,
+  variables,
   axes,
   change,
 }: ExprProps) {
@@ -252,13 +410,13 @@ function ExpressionControl({
           <span className="value-chip">
             {typeof expression.value === "string"
               ? `"${expression.value}"`
-              : String(expression.value)}
+              : displayValue(expression.value)}
           </span>
         );
       case "variable":
         return (
           <span className="value-chip">
-            {blueprint.variables.find((v) => v.id === expression.id)?.name ??
+            {variables.find((v) => v.id === expression.id)?.name ??
               "Missing variable"}
           </span>
         );
@@ -274,6 +432,41 @@ function ExpressionControl({
             )
           </span>
         );
+      case "unary":
+        return (
+          <span>
+            {expression.op}({summary(expression.value)})
+          </span>
+        );
+      case "query":
+        return <span>{expression.query}</span>;
+      case "property":
+        return (
+          <span>
+            {expression.target ? summary(expression.target) : "Self"}.
+            {expression.property}
+          </span>
+        );
+      case "exists":
+        return <span>Exists({summary(expression.reference)})</span>;
+      case "vector":
+        return (
+          <span>
+            Vector({summary(expression.x)}, {summary(expression.y)})
+          </span>
+        );
+      case "component":
+        return (
+          <span>
+            {summary(expression.vector)}.{expression.axis}
+          </span>
+        );
+      case "field":
+        return (
+          <span>
+            {summary(expression.record)}.{expression.key || "field"}
+          </span>
+        );
       case "binary":
         return (
           <span className="operator-line">
@@ -285,25 +478,86 @@ function ExpressionControl({
     }
   };
   function changeKind(kind: Expression["kind"]) {
-    if (kind === "literal") change(literal(defaultValue[expected ?? "number"]));
-    if (kind === "input") change({ kind, id: axes[0]?.id ?? "unassigned" });
-    if (kind === "variable")
-      change({
-        kind,
-        id:
-          (
-            blueprint.variables.find((v) => v.type === expected) ??
-            blueprint.variables[0]
-          )?.id ?? "unassigned",
-      });
-    if (kind === "binary")
-      change({
-        kind,
-        op: expected === "boolean" ? "!=" : "+",
-        left: literal(0),
-        right: literal(0),
-      });
+    switch (kind) {
+      case "literal":
+        change(literal(defaultValue[expected ?? "number"]));
+        break;
+      case "input":
+        change({ kind, id: axes[0]?.id ?? "unassigned" });
+        break;
+      case "variable":
+        change({
+          kind,
+          id:
+            (variables.find((v) => v.type === expected) ?? variables[0])?.id ??
+            "unassigned",
+        });
+        break;
+      case "binary":
+        change({
+          kind,
+          op: expected === "boolean" ? "!=" : "+",
+          left: literal(0),
+          right: literal(0),
+        });
+        break;
+      case "unary":
+        change({
+          kind,
+          op: expected === "boolean" ? "not" : "abs",
+          value: literal(expected === "boolean" ? false : 0),
+        });
+        break;
+      case "query":
+        change({ kind, query: expected === "string" ? "scene" : "self" });
+        break;
+      case "property":
+        change({
+          kind,
+          property:
+            expected === "boolean"
+              ? "visible"
+              : expected === "string"
+                ? "text"
+                : "x",
+        });
+        break;
+      case "exists":
+        change({ kind, reference: { kind: "query", query: "self" } });
+        break;
+      case "vector":
+        change({ kind, x: literal(0), y: literal(0) });
+        break;
+      case "component":
+        change({ kind, axis: "x", vector: literal(defaultValue.vector) });
+        break;
+      case "field":
+        change({
+          kind,
+          key: "",
+          type: expected && expected !== "record" ? expected : "number",
+          record: literal(defaultValue.record),
+        });
+        break;
+    }
   }
+  const nested = (
+    name: string,
+    value: Expression,
+    update: (value: Expression) => void,
+    type?: ValueType,
+  ) => (
+    <Field label={name}>
+      <ExpressionControl
+        expr={value}
+        label={label + " " + name.toLowerCase()}
+        change={update}
+        variables={variables}
+        axes={axes}
+        expected={type}
+      />
+    </Field>
+  );
   return (
     <div className="expression">
       <button
@@ -329,23 +583,34 @@ function ExpressionControl({
               <option value="variable">Variable</option>
               <option value="input">Input axis</option>
               <option value="binary">Binary operation</option>
+              <option value="unary">Unary operation</option>
+              <option value="query">Scene query</option>
+              <option value="property">Read property</option>
+              <option value="exists">Reference exists</option>
+              <option value="vector">Make vector</option>
+              <option value="component">Vector component</option>
+              <option value="field">Record field</option>
             </select>
           </Field>
+          <ExpressionEntry
+            label={label}
+            variables={variables}
+            axes={axes}
+            change={change}
+          />
           {expr.kind === "literal" && (
             <>
               <Field label="Type">
                 <select
                   aria-label={`${label} type`}
-                  value={typeof expr.value}
+                  value={typeOf(expr.value)}
                   onChange={(event) =>
                     change(
                       literal(defaultValue[event.target.value as ValueType]),
                     )
                   }
                 >
-                  <option value="number">Number</option>
-                  <option value="boolean">Boolean</option>
-                  <option value="string">Text</option>
+                  <TypeOptions />
                 </select>
               </Field>
               <Field label="Value">
@@ -366,10 +631,10 @@ function ExpressionControl({
                   change({ ...expr, id: event.target.value })
                 }
               >
-                {!blueprint.variables.some(
-                  (variable) => variable.id === expr.id,
-                ) && <option value={expr.id}>Choose a variable</option>}
-                {blueprint.variables.map((v) => (
+                {!variables.some((variable) => variable.id === expr.id) && (
+                  <option value={expr.id}>Choose a variable</option>
+                )}
+                {variables.map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.name} · {v.type}
                   </option>
@@ -397,6 +662,144 @@ function ExpressionControl({
               </select>
             </Field>
           )}
+          {expr.kind === "unary" && (
+            <>
+              <Field label="Operator">
+                <select
+                  aria-label={label + " unary operator"}
+                  value={expr.op}
+                  onChange={(e) => {
+                    const op = e.target.value as typeof expr.op;
+                    change({
+                      ...expr,
+                      op,
+                      value:
+                        (op === "not") === (expr.op === "not")
+                          ? expr.value
+                          : literal(op === "not" ? false : 0),
+                    });
+                  }}
+                >
+                  {["not", "negate", "abs", "floor", "round", "sqrt"].map(
+                    (op) => (
+                      <option key={op}>{op}</option>
+                    ),
+                  )}
+                </select>
+              </Field>
+              {nested(
+                "Operand",
+                expr.value,
+                (value) => change({ ...expr, value }),
+                expr.op === "not" ? "boolean" : "number",
+              )}
+            </>
+          )}
+          {expr.kind === "query" && (
+            <Field label="Query">
+              <select
+                aria-label={label + " query"}
+                value={expr.query}
+                onChange={(e) =>
+                  change({
+                    ...expr,
+                    query: e.target.value as typeof expr.query,
+                  })
+                }
+              >
+                <option value="self">Self Entity</option>
+                <option value="parent">Parent Entity</option>
+                <option value="scene">Scene Name</option>
+              </select>
+            </Field>
+          )}
+          {expr.kind === "property" && (
+            <>
+              <PropertyChoice
+                label={label + " property"}
+                value={expr.property}
+                change={(property) => change({ ...expr, property })}
+              />
+              <TargetChoice
+                target={expr.target}
+                set={(target) => change({ ...expr, target })}
+                render={(target) =>
+                  nested(
+                    "Entity",
+                    target,
+                    (next) => change({ ...expr, target: next }),
+                    "entity",
+                  )
+                }
+              />
+            </>
+          )}
+          {expr.kind === "exists" &&
+            nested(
+              "Reference",
+              expr.reference,
+              (reference) => change({ ...expr, reference }),
+              "entity",
+            )}
+          {expr.kind === "vector" && (
+            <>
+              {nested("X", expr.x, (x) => change({ ...expr, x }), "number")}
+              {nested("Y", expr.y, (y) => change({ ...expr, y }), "number")}
+            </>
+          )}
+          {expr.kind === "component" && (
+            <>
+              <Field label="Axis">
+                <select
+                  aria-label={label + " component"}
+                  value={expr.axis}
+                  onChange={(e) =>
+                    change({ ...expr, axis: e.target.value as "x" | "y" })
+                  }
+                >
+                  <option>x</option>
+                  <option>y</option>
+                </select>
+              </Field>
+              {nested(
+                "Vector",
+                expr.vector,
+                (vector) => change({ ...expr, vector }),
+                "vector",
+              )}
+            </>
+          )}
+          {expr.kind === "field" && (
+            <>
+              {nested(
+                "Record",
+                expr.record,
+                (record) => change({ ...expr, record }),
+                "record",
+              )}
+              <Field label="Field">
+                <TextField
+                  label={label + " record field"}
+                  value={expr.key}
+                  onChange={(key) => change({ ...expr, key })}
+                />
+              </Field>
+              <Field label="Type">
+                <select
+                  aria-label={label + " field type"}
+                  value={expr.type}
+                  onChange={(e) =>
+                    change({
+                      ...expr,
+                      type: e.target.value as typeof expr.type,
+                    })
+                  }
+                >
+                  <TypeOptions allowRecord={false} />
+                </select>
+              </Field>
+            </>
+          )}
           {expr.kind === "binary" && (
             <>
               <Field label="Operator">
@@ -418,7 +821,7 @@ function ExpressionControl({
                 <ExpressionControl
                   expr={expr.left}
                   label={`${label} left`}
-                  blueprint={blueprint}
+                  variables={variables}
                   axes={axes}
                   change={(left) => change({ ...expr, left })}
                 />
@@ -427,7 +830,7 @@ function ExpressionControl({
                 <ExpressionControl
                   expr={expr.right}
                   label={`${label} right`}
-                  blueprint={blueprint}
+                  variables={variables}
                   axes={axes}
                   change={(right) => change({ ...expr, right })}
                 />
@@ -437,6 +840,122 @@ function ExpressionControl({
         </div>
       )}
     </div>
+  );
+}
+function ExpressionEntry({
+  label,
+  variables,
+  axes,
+  change,
+}: Pick<ExprProps, "label" | "variables" | "axes" | "change">) {
+  const [source, setSource] = useState("");
+  const [error, setError] = useState("");
+  const listId = useId();
+  function apply() {
+    try {
+      change(parseExpression(source, { variables, axes }));
+      setError("");
+      setSource("");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+  return (
+    <details className="expression-source">
+      <summary>Enter expression</summary>
+      <div className="inline-actions">
+        <input
+          aria-label={label + " expression"}
+          value={source}
+          list={listId}
+          maxLength={4096}
+          onChange={(event) => setSource(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              apply();
+            }
+          }}
+        />
+        <button disabled={!source.trim()} onClick={apply}>
+          Apply
+        </button>
+      </div>
+      <datalist id={listId}>
+        {variables.map((v) => (
+          <option
+            key={v.id}
+            value={
+              /^[A-Za-z_$][\w$]*$/.test(v.name)
+                ? v.name
+                : `variable(${JSON.stringify(v.name)})`
+            }
+          />
+        ))}
+        {axes.map((axis) => (
+          <option key={axis.id} value={`axis(${JSON.stringify(axis.name)})`} />
+        ))}
+      </datalist>
+      {error && (
+        <small className="logic-error" role="alert">
+          {error}
+        </small>
+      )}
+    </details>
+  );
+}
+function PropertyChoice({
+  label,
+  value,
+  change,
+}: {
+  label: string;
+  value: Property;
+  change: (property: Property) => void;
+}) {
+  return (
+    <Field label="Property">
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => change(e.target.value as Property)}
+      >
+        {Object.keys(propertyTypes).map((property) => (
+          <option key={property}>{property}</option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+function TargetChoice({
+  target,
+  set,
+  render,
+}: {
+  target?: Expression;
+  set: (target?: Expression) => void;
+  render: (target: Expression) => ReactNode;
+}) {
+  return (
+    <>
+      <Field label="Target">
+        <select
+          aria-label="Target mode"
+          value={target ? "entity" : "self"}
+          onChange={(e) =>
+            set(
+              e.target.value === "entity"
+                ? literal(defaultValue.entity)
+                : undefined,
+            )
+          }
+        >
+          <option value="self">Self</option>
+          <option value="entity">Entity expression</option>
+        </select>
+      </Field>
+      {target && render(target)}
+    </>
   );
 }
 function AddBlock({ address }: { address: ListAddress }) {
@@ -473,16 +992,16 @@ function dropBlock(event: DragEvent, address: ListAddress, target?: string) {
   event.preventDefault();
   event.stopPropagation();
   editBlueprint((draft) => {
-    const from = draft.events
+    const from = entries(draft)
       .map((entry) => findBlock(entry.blocks, source))
       .find(Boolean);
     const to = getBlocks(draft, address);
     if (!from || !to || from.block.id === address.parentId) return;
     if (
       address.parentId &&
-      from.block.kind === "if" &&
-      (findBlock(from.block.then, address.parentId) ||
-        findBlock(from.block.else, address.parentId))
+      blockChildren(from.block).some((child) =>
+        findBlock(child.blocks, address.parentId!),
+      )
     )
       return;
     const [block] = from.blocks.splice(from.index, 1);
@@ -504,6 +1023,7 @@ interface Cards {
   blueprint: Blueprint;
   axes: Project["input"];
   problems: Map<string, string[]>;
+  signals: readonly Signal[];
 }
 function CardList({
   blocks,
@@ -538,6 +1058,7 @@ function BlockCard({
   blueprint,
   axes,
   problems,
+  signals,
 }: Cards & {
   block: Block;
   address: ListAddress;
@@ -546,9 +1067,27 @@ function BlockCard({
 }) {
   const selected = useEditor((state) => state.selectedTile === block.id);
   const active = useEditor((state) => state.snapshot.blocks.includes(block.id));
+  const breakpoint = useEditor(
+    (state) =>
+      Object.hasOwn(state.breakpoints, blueprint.id) &&
+      state.breakpoints[blueprint.id].includes(block.id),
+  );
+  const paused = useEditor(
+    (state) =>
+      state.snapshot.pause?.blueprintId === blueprint.id &&
+      state.snapshot.pause.blockId === block.id,
+  );
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (selected) card.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
   const entity = useEditor(selectedEntity);
   const [closed, setClosed] = useState(
     () => localStorage.getItem(`mosaic-collapse-${block.id}`) === "1",
+  );
+  const variables = variablesAt(blueprint, address, signals, block.id);
+  const entry = entries(blueprint).find(
+    (entry) => entry.id === address.eventId,
   );
   const info = kinds[block.kind];
   const Icon = symbolByKind(block);
@@ -563,7 +1102,7 @@ function BlockCard({
       expr={expr}
       change={change}
       expected={expected}
-      blueprint={blueprint}
+      variables={variables}
       axes={axes}
     />
   );
@@ -575,13 +1114,14 @@ function BlockCard({
     });
   const variable =
     block.kind === "set"
-      ? blueprint.variables.find((variable) => variable.id === block.variable)
+      ? variables.find((variable) => variable.id === block.variable)
       : undefined;
   const issues = problems.get(block.id);
   return (
     <article
+      ref={card}
       data-block-id={block.id}
-      className={`logic-card ${info.tone} ${selected ? "focused" : ""} ${active ? "executed" : ""}`}
+      className={`logic-card ${info.tone} ${selected ? "focused" : ""} ${active ? "executed" : ""} ${paused ? "debug-paused" : ""}`}
       onClick={(event) => {
         event.stopPropagation();
         useEditor.setState({ selectedTile: block.id });
@@ -600,6 +1140,10 @@ function BlockCard({
             event.dataTransfer.effectAllowed = "move";
           }}
           onKeyDown={(event) => {
+            if (event.key === "F9") {
+              event.preventDefault();
+              useEditor.getState().toggleBreakpoint(blueprint.id, block.id);
+            }
             if (
               event.altKey &&
               (event.key === "ArrowUp" || event.key === "ArrowDown")
@@ -612,6 +1156,17 @@ function BlockCard({
           <Icon size={17} />
           <strong>{nameByKind(block)}</strong>
           {block.kind === "move" && <span>(Self)</span>}
+        </button>
+        <button
+          className={`breakpoint ${breakpoint ? "enabled" : ""}`}
+          aria-label={breakpoint ? "Remove breakpoint" : "Set breakpoint"}
+          aria-pressed={breakpoint}
+          title={breakpoint ? "Remove breakpoint (F9)" : "Set breakpoint (F9)"}
+          onClick={() =>
+            useEditor.getState().toggleBreakpoint(blueprint.id, block.id)
+          }
+        >
+          <Circle size={12} fill={breakpoint ? "currentColor" : "none"} />
         </button>
         {active && (
           <span className="execution-light" title="Executed in play mode" />
@@ -662,6 +1217,19 @@ function BlockCard({
       {!closed && (
         <>
           <div className="logic-body">
+            <AdvancedFields
+              block={block}
+              blueprint={blueprint}
+              signals={signals}
+              variables={variables}
+              entry={entry}
+              expression={expressions}
+              replace={(next) =>
+                changeBlock(address, block.id, (draft) =>
+                  Object.assign(draft, next),
+                )
+              }
+            />
             {block.kind === "set" && (
               <div className="expression-row">
                 <select
@@ -671,7 +1239,7 @@ function BlockCard({
                     changeBlock(address, block.id, (draft) => {
                       if (draft.kind === "set") {
                         draft.variable = event.target.value;
-                        const type = blueprint.variables.find(
+                        const type = variables.find(
                           (v) => v.id === draft.variable,
                         )?.type;
                         if (type) draft.value = literal(defaultValue[type]);
@@ -682,7 +1250,7 @@ function BlockCard({
                   {!variable && (
                     <option value={block.variable}>Choose variable</option>
                   )}
-                  {blueprint.variables.map((v) => (
+                  {variables.map((v) => (
                     <option key={v.id} value={v.id}>
                       {v.name}
                     </option>
@@ -783,6 +1351,27 @@ function BlockCard({
                     ))}
                   </select>
                 </Field>
+                <TargetChoice
+                  target={block.target}
+                  set={(target) =>
+                    changeBlock(address, block.id, (draft) => {
+                      if (draft.kind === "property") draft.target = target;
+                    })
+                  }
+                  render={(target) => (
+                    <Field label="Entity">
+                      {expressions(
+                        "Target entity",
+                        target,
+                        (next) =>
+                          changeBlock(address, block.id, (draft) => {
+                            if (draft.kind === "property") draft.target = next;
+                          }),
+                        "entity",
+                      )}
+                    </Field>
+                  )}
+                />
                 <Field label="Value">
                   {expressions(
                     "Property value",
@@ -811,6 +1400,22 @@ function BlockCard({
               </div>
             ))}
           </div>
+          {(block.kind === "repeat" || block.kind === "while") && (
+            <div className="branch-stack">
+              <CardList
+                address={{
+                  eventId: address.eventId,
+                  parentId: block.id,
+                  branch: "body",
+                }}
+                blocks={block.body}
+                blueprint={blueprint}
+                axes={axes}
+                problems={problems}
+                signals={signals}
+              />
+            </div>
+          )}
           {block.kind === "if" && (
             <div className="branch-stack">
               <CardList
@@ -823,6 +1428,7 @@ function BlockCard({
                 blueprint={blueprint}
                 axes={axes}
                 problems={problems}
+                signals={signals}
               />
               <div className="else-branch">
                 <div className="else-header">
@@ -838,6 +1444,7 @@ function BlockCard({
                   blueprint={blueprint}
                   axes={axes}
                   problems={problems}
+                  signals={signals}
                 />
               </div>
             </div>
@@ -848,17 +1455,296 @@ function BlockCard({
   );
 }
 
+type RenderExpression = (
+  label: string,
+  expr: Expression,
+  change: (expr: Expression) => void,
+  expected?: ValueType,
+) => ReactNode;
+function AdvancedFields({
+  block,
+  blueprint,
+  signals,
+  variables,
+  entry,
+  expression,
+  replace,
+}: {
+  block: Block;
+  blueprint: Blueprint;
+  signals: readonly Signal[];
+  variables: Variable[];
+  entry?: Entry;
+  expression: RenderExpression;
+  replace: (block: Block) => void;
+}) {
+  switch (block.kind) {
+    case "let":
+      return (
+        <>
+          <div className="expression-row">
+            <TextField
+              label="Local name"
+              value={block.name}
+              onChange={(name) => replace({ ...block, name })}
+            />
+            <select
+              aria-label="Local type"
+              value={block.type}
+              onChange={(event) => {
+                const type = event.target.value as ValueType;
+                replace({ ...block, type, value: literal(defaultValue[type]) });
+              }}
+            >
+              <TypeOptions />
+            </select>
+            <b>=</b>
+            {expression(
+              "Local value",
+              block.value,
+              (value) => replace({ ...block, value }),
+              block.type,
+            )}
+          </div>
+        </>
+      );
+    case "repeat":
+      return (
+        <Field label="Count">
+          {expression(
+            "Repeat count",
+            block.count,
+            (count) => replace({ ...block, count }),
+            "number",
+          )}
+        </Field>
+      );
+    case "while":
+      return (
+        <Field label="Condition">
+          {expression(
+            "Loop condition",
+            block.condition,
+            (condition) => replace({ ...block, condition }),
+            "boolean",
+          )}
+        </Field>
+      );
+    case "wait":
+      return (
+        <Field label="Seconds">
+          {expression(
+            "Wait duration",
+            block.seconds,
+            (seconds) => replace({ ...block, seconds }),
+            "number",
+          )}
+        </Field>
+      );
+    case "call": {
+      const fn = blueprint.functions?.find((fn) => fn.id === block.functionId);
+      const results = variables.filter(
+        (variable) => variable.type === fn?.returns,
+      );
+      return (
+        <>
+          <Field label="Function">
+            <select
+              aria-label="Function to call"
+              value={block.functionId}
+              onChange={(event) => {
+                const next = blueprint.functions?.find(
+                  (item) => item.id === event.target.value,
+                );
+                if (!next) return;
+                replace({
+                  ...block,
+                  functionId: next.id,
+                  args: Object.fromEntries(
+                    next.parameters.map((p) => [
+                      p.id,
+                      literal(defaultValue[p.type]),
+                    ]),
+                  ),
+                  result: undefined,
+                });
+              }}
+            >
+              {!fn && <option value={block.functionId}>Choose function</option>}
+              {blueprint.functions?.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {fn?.parameters.map((parameter) => {
+            const value = Object.hasOwn(block.args, parameter.id)
+              ? block.args[parameter.id]
+              : undefined;
+            const set = (value: Expression) =>
+              replace({
+                ...block,
+                args: { ...block.args, [parameter.id]: value },
+              });
+            return (
+              <Field label={parameter.name} key={parameter.id}>
+                {value ? (
+                  expression(
+                    "Argument " + parameter.name,
+                    value,
+                    set,
+                    parameter.type,
+                  )
+                ) : (
+                  <button
+                    onClick={() => set(literal(defaultValue[parameter.type]))}
+                  >
+                    Set Default
+                  </button>
+                )}
+              </Field>
+            );
+          })}
+          {fn && fn.returns !== "void" && (
+            <Field label="Store result">
+              <select
+                aria-label="Function result variable"
+                value={block.result ?? ""}
+                onChange={(event) =>
+                  replace({ ...block, result: event.target.value || undefined })
+                }
+              >
+                <option value="">Discard</option>
+                {block.result &&
+                  !results.some((v) => v.id === block.result) && (
+                    <option value={block.result}>
+                      Missing result variable
+                    </option>
+                  )}
+                {results.map((variable) => (
+                  <option key={variable.id} value={variable.id}>
+                    {variable.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+        </>
+      );
+    }
+    case "return": {
+      const type = entry && "parameters" in entry ? entry.returns : undefined;
+      if (!type || type === "void")
+        return (
+          block.value && (
+            <button onClick={() => replace({ ...block, value: undefined })}>
+              Remove Return Value
+            </button>
+          )
+        );
+      return (
+        <Field label="Value">
+          {block.value ? (
+            expression(
+              "Return value",
+              block.value,
+              (value) => replace({ ...block, value }),
+              type,
+            )
+          ) : (
+            <button
+              onClick={() =>
+                replace({ ...block, value: literal(defaultValue[type]) })
+              }
+            >
+              Set Return Value
+            </button>
+          )}
+        </Field>
+      );
+    }
+    case "emit": {
+      const signal = signals.find((signal) => signal.id === block.signalId);
+      const type = signal?.type;
+      return (
+        <>
+          <Field label="Event">
+            <select
+              aria-label="Event to emit"
+              value={block.signalId}
+              onChange={(event) => {
+                const next = signals.find(
+                  (item) => item.id === event.target.value,
+                );
+                if (next)
+                  replace({
+                    ...block,
+                    signalId: next.id,
+                    value:
+                      next.type === "void"
+                        ? undefined
+                        : literal(defaultValue[next.type]),
+                  });
+              }}
+            >
+              {!signal && <option value={block.signalId}>Choose event</option>}
+              {signals.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {type && type !== "void" && (
+            <Field label="Payload">
+              {block.value ? (
+                expression(
+                  "Event payload",
+                  block.value,
+                  (value) => replace({ ...block, value }),
+                  type,
+                )
+              ) : (
+                <button
+                  onClick={() =>
+                    replace({ ...block, value: literal(defaultValue[type]) })
+                  }
+                >
+                  Set Payload
+                </button>
+              )}
+            </Field>
+          )}
+          {type === "void" && block.value && (
+            <button onClick={() => replace({ ...block, value: undefined })}>
+              Remove Payload
+            </button>
+          )}
+        </>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
 export function BlueprintWorkspace() {
   const list = useEditor((state) => state.project.blueprints);
   const blueprint = useEditor(selectedBlueprint);
   const axes = useEditor((state) => state.project.input);
+  const signals = useEditor((state) => state.project.signals ?? emptySignals);
   const eventId = useEditor((state) => state.eventId);
   const [scale, setScale] = useState(100);
   const compiled = useMemo(
     () =>
       blueprint &&
-      compileBlueprint(blueprint, new Set(axes.map((axis) => axis.id))),
-    [axes, blueprint],
+      compileBlueprint(
+        blueprint,
+        new Set(axes.map((axis) => axis.id)),
+        signals,
+      ),
+    [axes, blueprint, signals],
   );
   const diagnostics = compiled?.diagnostics ?? [];
   const problems = new Map<string, string[]>();
@@ -932,7 +1818,7 @@ export function BlueprintWorkspace() {
               </div>
               <div>
                 <h2>{blueprint.name}</h2>
-                <p>Event</p>
+                <p>{"parameters" in event ? "Function" : "Event"}</p>
               </div>
               <select
                 aria-label="Blueprint event"
@@ -944,11 +1830,9 @@ export function BlueprintWorkspace() {
                   })
                 }
               >
-                {blueprint.events.map((entry) => (
+                {entries(blueprint).map((entry) => (
                   <option value={entry.id} key={entry.id}>
-                    {entry.kind === "update"
-                      ? "Update · Every Frame"
-                      : "On Start"}
+                    {entryName(entry, signals)}
                   </option>
                 ))}
               </select>
@@ -964,6 +1848,7 @@ export function BlueprintWorkspace() {
               blueprint={blueprint}
               axes={axes}
               problems={problems}
+              signals={signals}
             />
           </div>
         </div>
@@ -1011,19 +1896,22 @@ export function BlueprintInspector() {
   const eventId = useEditor((state) => state.eventId);
   const tile = useEditor((state) => state.selectedTile);
   const axes = useEditor((state) => state.project.input);
+  const signals = useEditor((state) => state.project.signals ?? emptySignals);
   if (!blueprint)
     return (
       <div className="panel-body muted">
         Choose a blueprint to edit its variables.
       </div>
     );
-  const events = blueprint.events;
   const block = tile
-    ? events.map((entry) => findBlock(entry.blocks, tile)).find(Boolean)?.block
+    ? entries(blueprint)
+        .map((entry) => findBlock(entry.blocks, tile))
+        .find(Boolean)?.block
     : undefined;
   const diagnostics = compileBlueprint(
     blueprint,
     new Set(axes.map((axis) => axis.id)),
+    signals,
   ).diagnostics;
   return (
     <div className="panel-body inspector">
@@ -1053,7 +1941,10 @@ export function BlueprintInspector() {
       </Section>
       <Section title="Variables">
         {blueprint.variables.map((variable) => (
-          <div className="variable-entry" key={variable.id}>
+          <div
+            className={`variable-entry ${typeof variable.initial === "object" ? "compound-variable" : ""}`}
+            key={variable.id}
+          >
             <TextField
               label="Variable name"
               value={variable.name}
@@ -1072,14 +1963,13 @@ export function BlueprintInspector() {
                   const value = draft.variables.find(
                     (v) => v.id === variable.id,
                   )!;
+                  draft.version = 2;
                   value.type = event.target.value as ValueType;
                   value.initial = defaultValue[value.type];
                 })
               }
             >
-              <option value="number">Float</option>
-              <option value="boolean">Bool</option>
-              <option value="string">Text</option>
+              <TypeOptions />
             </select>
             <ValueControl
               label={`Initial ${variable.name}`}
@@ -1121,20 +2011,11 @@ export function BlueprintInspector() {
           <Plus size={15} /> Variable
         </button>
       </Section>
-      <Section title="Events">
-        {events.map((entry) => (
-          <button
-            key={entry.id}
-            className={`tree-row ${activeEvent(blueprint, eventId)?.id === entry.id ? "selected" : ""}`}
-            onClick={() =>
-              useEditor.setState({ eventId: entry.id, selectedTile: null })
-            }
-          >
-            <Zap size={15} />
-            {entry.kind === "update" ? "Update (Every Frame)" : "On Start"}
-          </button>
-        ))}
-      </Section>
+      <EntryInspector
+        blueprint={blueprint}
+        signals={signals}
+        active={activeEvent(blueprint, eventId)}
+      />
       {diagnostics.length > 0 && (
         <Section title="Problems">
           {diagnostics.map((d, index) => (
@@ -1145,8 +2026,11 @@ export function BlueprintInspector() {
                 useEditor.setState({
                   selectedTile: d.blockId,
                   eventId:
-                    events.find((entry) => findBlock(entry.blocks, d.blockId))
-                      ?.id ?? eventId,
+                    entries(blueprint).find(
+                      (entry) =>
+                        entry.id === d.blockId ||
+                        findBlock(entry.blocks, d.blockId),
+                    )?.id ?? eventId,
                 })
               }
             >
@@ -1157,4 +2041,297 @@ export function BlueprintInspector() {
       )}
     </div>
   );
+}
+
+export function symbolName(blueprint: Blueprint | undefined, id: string) {
+  if (!blueprint) return id;
+  const variable = blueprint.variables.find((item) => item.id === id);
+  if (variable) return variable.name;
+  for (const entry of entries(blueprint)) {
+    if ("parameters" in entry) {
+      const parameter = entry.parameters.find((item) => item.id === id);
+      if (parameter) return parameter.name;
+    } else if (entry.id === id && entry.kind === "signal") return "payload";
+    const local = findBlock(entry.blocks, id)?.block;
+    if (local?.kind === "let") return local.name;
+  }
+  return id;
+}
+export function revealBlock(blueprint: Blueprint | undefined, blockId: string) {
+  const entry =
+    blueprint &&
+    entries(blueprint).find(
+      (entry) => entry.id === blockId || findBlock(entry.blocks, blockId),
+    );
+  if (entry)
+    useEditor.setState({
+      blueprintId: blueprint!.id,
+      workspace: "Blueprints",
+      eventId: entry.id,
+      selectedTile: blockId,
+    });
+}
+function showEntry(entryId: string) {
+  useEditor.setState({ eventId: entryId, selectedTile: null });
+}
+function EntryInspector({
+  blueprint,
+  signals,
+  active,
+}: {
+  blueprint: Blueprint;
+  signals: readonly Signal[];
+  active?: Entry;
+}) {
+  function addEvent(value: string) {
+    if (!value) return;
+    const id = newId();
+    const kind = value === "start" || value === "update" ? value : "signal";
+    editBlueprint((draft) => {
+      draft.version = 2;
+      draft.events.push({
+        id,
+        kind,
+        ...(kind === "signal" ? { signalId: value.slice(7) } : {}),
+        blocks: [],
+      });
+    });
+    showEntry(id);
+  }
+  function addFunction() {
+    const id = newId();
+    editBlueprint((draft) => {
+      draft.version = 2;
+      (draft.functions ??= []).push({
+        id,
+        name: "New Function",
+        parameters: [],
+        returns: "void",
+        blocks: [],
+      });
+    });
+    showEntry(id);
+  }
+  function updateFunction(id: string, change: (fn: BlueprintFunction) => void) {
+    editBlueprint((draft) => {
+      const fn = draft.functions?.find((item) => item.id === id);
+      if (fn) change(fn);
+    });
+  }
+  const currentFunction = active && "parameters" in active ? active : undefined;
+  const currentEvent = active && "kind" in active ? active : undefined;
+  return (
+    <>
+      <Section title="Events">
+        {blueprint.events.map((entry) => (
+          <button
+            key={entry.id}
+            className={`tree-row ${active?.id === entry.id ? "selected" : ""}`}
+            onClick={() => showEntry(entry.id)}
+          >
+            <Zap size={15} />
+            {entryName(entry, signals)}
+          </button>
+        ))}
+        <select
+          aria-label="Add event handler"
+          value=""
+          disabled={blueprint.events.length >= 80}
+          onChange={(event) => addEvent(event.target.value)}
+        >
+          <option value="">+ Event Handler</option>
+          <option value="start">On Start</option>
+          <option value="update">Update (Every Frame)</option>
+          {signals.map((signal) => (
+            <option key={signal.id} value={"signal:" + signal.id}>
+              {signal.name}
+            </option>
+          ))}
+        </select>
+        {currentEvent && (
+          <button
+            className="danger"
+            onClick={() =>
+              editBlueprint((draft) => {
+                draft.events = draft.events.filter(
+                  (event) => event.id !== currentEvent.id,
+                );
+              })
+            }
+          >
+            Remove Selected Event
+          </button>
+        )}
+      </Section>
+      <Section title="Functions">
+        {blueprint.functions?.map((fn) => (
+          <button
+            key={fn.id}
+            className={`tree-row ${active?.id === fn.id ? "selected" : ""}`}
+            onClick={() => showEntry(fn.id)}
+          >
+            <Code2 size={15} />
+            {fn.name}
+          </button>
+        ))}
+        <button
+          onClick={addFunction}
+          disabled={(blueprint.functions?.length ?? 0) >= 100}
+        >
+          <Plus size={15} /> Function
+        </button>
+        {currentFunction && (
+          <>
+            <Field label="Name">
+              <TextField
+                label="Function name"
+                value={currentFunction.name}
+                onChange={(name) =>
+                  updateFunction(currentFunction.id, (fn) => {
+                    fn.name = name;
+                  })
+                }
+              />
+            </Field>
+            <Field label="Returns">
+              <select
+                aria-label="Return type"
+                value={currentFunction.returns}
+                onChange={(event) =>
+                  updateFunction(currentFunction.id, (fn) => {
+                    fn.returns = event.target
+                      .value as BlueprintFunction["returns"];
+                  })
+                }
+              >
+                <TypeOptions allowVoid />
+              </select>
+            </Field>
+            {currentFunction.parameters.map((parameter) => (
+              <div className="signature-row" key={parameter.id}>
+                <TextField
+                  label="Parameter name"
+                  value={parameter.name}
+                  onChange={(name) =>
+                    updateFunction(currentFunction.id, (fn) => {
+                      fn.parameters.find((p) => p.id === parameter.id)!.name =
+                        name;
+                    })
+                  }
+                />
+                <select
+                  aria-label="Parameter type"
+                  value={parameter.type}
+                  onChange={(event) =>
+                    updateFunction(currentFunction.id, (fn) => {
+                      fn.parameters.find((p) => p.id === parameter.id)!.type =
+                        event.target.value as ValueType;
+                    })
+                  }
+                >
+                  <TypeOptions />
+                </select>
+                <button
+                  aria-label={"Remove parameter " + parameter.name}
+                  onClick={() =>
+                    updateFunction(currentFunction.id, (fn) => {
+                      fn.parameters = fn.parameters.filter(
+                        (p) => p.id !== parameter.id,
+                      );
+                    })
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <button
+              disabled={currentFunction.parameters.length >= 32}
+              onClick={() =>
+                updateFunction(currentFunction.id, (fn) => {
+                  fn.parameters.push({
+                    id: newId(),
+                    name: "parameter" + (fn.parameters.length + 1),
+                    type: "number",
+                  });
+                })
+              }
+            >
+              <Plus size={15} /> Parameter
+            </button>
+            <button
+              className="danger"
+              onClick={() =>
+                editBlueprint((draft) => {
+                  draft.functions = draft.functions?.filter(
+                    (fn) => fn.id !== currentFunction.id,
+                  );
+                })
+              }
+            >
+              Remove Selected Function
+            </button>
+          </>
+        )}
+      </Section>
+      <Section title="Scene Events" open={false}>
+        {signals.map((signal) => (
+          <div className="signature-row" key={signal.id}>
+            <TextField
+              label="Scene event name"
+              value={signal.name}
+              onChange={(name) =>
+                editSignal(signal.id, (draft) => {
+                  draft.name = name;
+                })
+              }
+            />
+            <select
+              aria-label="Event payload type"
+              value={signal.type}
+              onChange={(event) =>
+                editSignal(signal.id, (draft) => {
+                  draft.type = event.target.value as Signal["type"];
+                })
+              }
+            >
+              <TypeOptions allowVoid />
+            </select>
+            <button
+              aria-label={"Remove event " + signal.name}
+              onClick={() =>
+                useEditor.getState().edit((project) => {
+                  project.signals = project.signals?.filter(
+                    (event) => event.id !== signal.id,
+                  );
+                })
+              }
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          disabled={signals.length >= 256}
+          onClick={() =>
+            useEditor.getState().edit((project) => {
+              (project.signals ??= []).push({
+                id: newId(),
+                name: "New Event",
+                type: "void",
+              });
+            })
+          }
+        >
+          <Plus size={15} /> Scene Event
+        </button>
+      </Section>
+    </>
+  );
+}
+function editSignal(id: string, change: (signal: Signal) => void) {
+  useEditor.getState().edit((project) => {
+    const signal = project.signals?.find((item) => item.id === id);
+    if (signal) change(signal);
+  });
 }

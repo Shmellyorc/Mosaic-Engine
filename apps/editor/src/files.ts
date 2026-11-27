@@ -200,7 +200,11 @@ export async function exportGame() {
   );
   for (const blueprint of project.blueprints) {
     if (!assigned.has(blueprint.id)) continue;
-    const [diagnostic] = compileBlueprint(blueprint, axes).diagnostics;
+    const [diagnostic] = compileBlueprint(
+      blueprint,
+      axes,
+      project.signals,
+    ).diagnostics;
     if (diagnostic)
       throw new Error(
         `${blueprint.name} (${diagnostic.blockId}) — ${diagnostic.message}`,

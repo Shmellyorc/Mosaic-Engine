@@ -16,12 +16,20 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 ## Author and play
 
 - **Scene** creates scenes, entities and child entities. Use the dockable Inspector or Scene Settings to adjust components, layer order, camera follow and transforms. Drag visible entities to move them, Alt-drag to pan, and scroll to zoom.
-- **Blueprints** edits typed expressions and nested branches for On Start and Update events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block. During play, Debug shows execution activity and entity variables.
+- **Blueprints** edits typed expressions, nested branches and loops, reusable functions, and scene events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block.
 - **Tilemap**, **Animator**, **UI**, and **Input** provide separate central workspaces for painting grid tiles, editing and previewing spritesheet clips, placing HUD labels, and binding keyboard axes.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
 - **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring.
 
-Open **File → Open Lantern Ridge Sample** for a self-contained example. Move the lantern keeper with A/D or the arrow keys. The project demonstrates camera follow, a spritesheet with idle and walking clips, and a screen-space HUD. Sample art is original to this repository and covered by the LICENSE.
+Open **File → Open Lantern Ridge Sample** for a self-contained example. Move the lantern keeper with A/D or the arrow keys. The project demonstrates camera follow, a spritesheet with idle and walking clips, and a screen-space HUD. The Lookout Lamp demonstrates a timed loop, a typed scene event, and a reusable function. Sample art is original to this repository and covered by the LICENSE.
+
+## Blueprint execution
+
+- Use **Functions** in the Inspector to define parameters and a return type. **Call Function** passes typed arguments and can store the result in a variable. **Declare Local** scopes a value to the rest of its stack and its nested blocks. Entity variables retain one value per runtime entity.
+- Define a payload type under **Scene Events**, add an event handler, and emit the event from any blueprint in the scene. A handler can read its `payload` variable. **Wait** suspends its stack for simulation time while other stacks continue. Update handlers finish their current invocation before starting another.
+- Select an expression chip for typed controls or open **Enter expression** to use a JavaScript-style expression such as `amount * 2 + Math.abs(offset)`. The parser resolves names to stable IDs and accepts an allowlisted set of operations. Expressions support numbers, Booleans, text, vectors, entity and asset references, enum values, and typed record fields.
+- Click a tile’s breakpoint indicator or press **F9** on its header. **Step Block** in Debug executes one block and shows the current call stack and locals. Continue with **Resume** or the top-bar Play button. Blueprint edits during play recompile affected behaviours, keep compatible entity variables, and restart their update handlers on the next simulation tick. Use Restart to rerun On Start handlers.
+- Blueprint format 2 preserves functions, events and typed expression data. Format 1 blueprints still open and run. The exported player executes the same compiled logic with editor breakpoints disabled.
 
 ## Rendering and export
 

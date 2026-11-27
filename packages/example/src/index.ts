@@ -107,6 +107,15 @@ export function exampleProject(): Project {
       else: [{ id: "idle-animation", kind: "animate", clip: "Idle" }],
     },
   ];
+  const beacon = object("beacon", "Lookout Lamp", actors, {
+    x: 626,
+    y: 280,
+    width: 8,
+    height: 8,
+    alpha: 0.35,
+  });
+  beacon.visual = { kind: "rect", color: "#ffd28c" };
+  beacon.blueprintId = "beacon-behaviour";
   return {
     version: 1,
     id: "lantern-ridge",
@@ -114,6 +123,7 @@ export function exampleProject(): Project {
     width: 640,
     height: 360,
     startSceneId: "ridge-scene",
+    signals: [{ id: "beacon-glow", name: "Beacon Glow", type: "boolean" }],
     assets: [
       { id: "ridge-art", name: "Ridge panorama", source: landscape },
       { id: "keeper-art", name: "Lantern spritesheet", source: sheet },
@@ -143,7 +153,7 @@ export function exampleProject(): Project {
           { id: actors, name: "Characters", visible: true },
           { id: hud, name: "HUD", visible: true },
         ],
-        entities: [world, player, label, controls],
+        entities: [world, player, beacon, label, controls],
         tilemap: { width: 40, height: 20, size: tileSize, tiles: [] },
       },
     ],
@@ -166,6 +176,85 @@ export function exampleProject(): Project {
                 id: "start-log",
                 kind: "log",
                 value: literal("Lantern Ridge is ready."),
+              },
+            ],
+          },
+        ],
+      },
+      {
+        version: 2,
+        id: "beacon-behaviour",
+        name: "Lookout Lamp",
+        variables: [],
+        functions: [
+          {
+            id: "light-function",
+            name: "Set Glow",
+            parameters: [{ id: "glow", name: "glow", type: "boolean" }],
+            returns: "void",
+            blocks: [
+              {
+                id: "glow-condition",
+                kind: "if",
+                condition: { kind: "variable", id: "glow" },
+                then: [
+                  {
+                    id: "bright",
+                    kind: "property",
+                    property: "alpha",
+                    value: literal(1),
+                  },
+                ],
+                else: [
+                  {
+                    id: "dim",
+                    kind: "property",
+                    property: "alpha",
+                    value: literal(0.35),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        events: [
+          {
+            id: "blink-start",
+            kind: "start",
+            blocks: [
+              {
+                id: "blink-repeat",
+                kind: "repeat",
+                count: literal(4),
+                body: [
+                  {
+                    id: "emit-on",
+                    kind: "emit",
+                    signalId: "beacon-glow",
+                    value: literal(true),
+                  },
+                  { id: "wait-on", kind: "wait", seconds: literal(0.5) },
+                  {
+                    id: "emit-off",
+                    kind: "emit",
+                    signalId: "beacon-glow",
+                    value: literal(false),
+                  },
+                  { id: "wait-off", kind: "wait", seconds: literal(0.5) },
+                ],
+              },
+            ],
+          },
+          {
+            id: "on-glow",
+            kind: "signal",
+            signalId: "beacon-glow",
+            blocks: [
+              {
+                id: "call-glow",
+                kind: "call",
+                functionId: "light-function",
+                args: { glow: { kind: "variable", id: "on-glow" } },
               },
             ],
           },

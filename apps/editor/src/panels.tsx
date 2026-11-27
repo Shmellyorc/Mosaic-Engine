@@ -13,9 +13,10 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createEntity, createScene, newId, type Entity } from "@mosaic/model";
-import { BlueprintInspector } from "./blueprint";
+import { BlueprintInspector, revealBlock, symbolName } from "./blueprint";
+import { displayValue, typeOf } from "@mosaic/blueprints";
 import { Field, NumberField, Section, TextField } from "./controls";
-import { playGame } from "./play";
+import { playGame, stepBlueprint } from "./play";
 import {
   chooseEntity,
   chooseScene,
@@ -819,7 +820,25 @@ export function ConsolePanel() {
           <div key={index} className={`console-entry ${entry.level}`}>
             <span>{entry.level}</span>
             {entry.message}
-            {entry.blockId && <code>{entry.blockId}</code>}
+            {entry.blockId && (
+              <button
+                className="diagnostic-link"
+                onClick={() => {
+                  const state = useEditor.getState();
+                  const entity = selectedScene(state).entities.find(
+                    (item) => item.id === entry.entityId,
+                  );
+                  revealBlock(
+                    state.project.blueprints.find(
+                      (item) => item.id === entity?.blueprintId,
+                    ),
+                    entry.blockId!,
+                  );
+                }}
+              >
+                {entry.blockId}
+              </button>
+            )}
           </div>
         ))
       ) : (
@@ -835,8 +854,27 @@ export function DebugPanel() {
   const snapshot = useEditor((state) => state.snapshot);
   const entity = useEditor(selectedEntity);
   const blueprint = useEditor((state) =>
-    state.project.blueprints.find((item) => item.id === entity?.blueprintId),
+    state.project.blueprints.find(
+      (item) =>
+        item.id === (snapshot.pause?.blueprintId ?? entity?.blueprintId),
+    ),
   );
+  const transport = useEditor((state) => state.transport);
+  const variables = (blueprint?.variables ?? []).map((variable) => ({
+    ...variable,
+    value:
+      snapshot.variables.find((entry) => entry.id === variable.id)?.value ??
+      variable.initial,
+  }));
+  for (const [id, value] of snapshot.pause?.locals ?? []) {
+    variables.push({
+      id,
+      name: symbolName(blueprint, id),
+      type: typeOf(value),
+      initial: value,
+      value,
+    });
+  }
   return (
     <div className="panel-body debug-panel">
       <div>
@@ -852,19 +890,14 @@ export function DebugPanel() {
             </tr>
           </thead>
           <tbody>
-            {(blueprint?.variables ?? []).map((v) => (
+            {variables.map((v) => (
               <tr key={v.id}>
                 <td>
                   <span className="variable-dot" />
                   {v.name}
                 </td>
                 <td>{v.type}</td>
-                <td>
-                  {String(
-                    snapshot.variables.find((entry) => entry.id === v.id)
-                      ?.value ?? v.initial,
-                  )}
-                </td>
+                <td>{displayValue(v.value)}</td>
               </tr>
             ))}
           </tbody>
@@ -875,6 +908,29 @@ export function DebugPanel() {
           <strong>Execution Activity</strong>
           <span>{snapshot.time.toFixed(2)} s</span>
         </div>
+        {transport !== "editing" && (
+          <div className="debug-controls">
+            <button
+              disabled={!snapshot.pause || transport !== "paused"}
+              onClick={stepBlueprint}
+            >
+              Step Block
+            </button>
+            {transport === "paused" && (
+              <button onClick={() => useEditor.getState().play()}>
+                Resume
+              </button>
+            )}
+          </div>
+        )}
+        {snapshot.pause && (
+          <div className="debug-frame" data-testid="blueprint-pause">
+            <strong>Paused before block</strong>
+            {snapshot.pause.stack.map((frame, depth) => (
+              <span key={depth + frame.entryId}>{frame.name}</span>
+            ))}
+          </div>
+        )}
         <div className="subtle-copy" data-testid="runtime-position">
           {snapshot.position
             ? `Position ${snapshot.position.x.toFixed(1)}, ${snapshot.position.y.toFixed(1)}`

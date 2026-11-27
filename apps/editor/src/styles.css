@@ -1363,3 +1363,74 @@ button.tree-row {
 .else-header {
   min-height: 23px;
 }
+
+.logic-header .breakpoint {
+  opacity: 0.45;
+  color: #bcb0ca;
+}
+.logic-header .breakpoint:hover,
+.logic-header .breakpoint:focus-visible {
+  opacity: 1;
+}
+.logic-header .breakpoint.enabled {
+  opacity: 1;
+  color: #ff839e;
+}
+.logic-card.debug-paused {
+  outline: 2px solid #ffcf79;
+  outline-offset: 1px;
+}
+.debug-controls,
+.debug-frame {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px 7px;
+}
+.debug-frame {
+  color: #ffcf79;
+}
+.debug-frame span {
+  border: 1px solid #4a4058;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.extended-fields {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.signature-row,
+.record-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(65px, 0.8fr) auto;
+  gap: 4px;
+}
+.signature-row input,
+.signature-row select {
+  width: 100%;
+}
+.record-field > :first-child {
+  grid-column: 1 / -1;
+}
+.compound-variable > :nth-child(3) {
+  grid-column: 1 / -2;
+  grid-row: 2;
+}
+.compound-variable > :last-child {
+  grid-column: 4;
+  grid-row: 1;
+}
+.diagnostic-link {
+  margin-left: 4px;
+  color: #c6a1fc;
+}
+.expression-source summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+.expression-source input {
+  min-width: 0;
+  flex: 1;
+}

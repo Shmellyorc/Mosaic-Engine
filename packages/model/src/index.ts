@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { blueprintSchema } from "@mosaic/blueprints";
+import { blueprintSchema, signalSchema } from "@mosaic/blueprints";
 
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_PROJECT_BYTES = 64 * 1024 * 1024;
@@ -105,6 +105,7 @@ const sceneSchema = z.object({
   }),
 });
 const codes = z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,31}$/)).max(16);
+export const emptySignals: never[] = [];
 const projectSchema = z.object({
   version: z.literal(1),
   id,
@@ -115,6 +116,7 @@ const projectSchema = z.object({
   scenes: z.array(sceneSchema).min(1).max(500),
   assets: z.array(assetSchema).max(4096),
   blueprints: z.array(blueprintSchema).max(4096),
+  signals: z.array(signalSchema).max(256).optional(),
   input: z
     .array(z.object({ id, name, negative: codes, positive: codes }))
     .max(128),
@@ -161,6 +163,7 @@ export function validateProject(input: unknown): Project {
   const assetIds = idsOf(project.assets, "asset");
   const blueprintIds = idsOf(project.blueprints, "blueprint");
   idsOf(project.input, "input");
+  idsOf(project.signals ?? [], "event");
   if (!sceneIds.has(project.startSceneId))
     throw new Error("The starting scene is missing.");
   for (const scene of project.scenes) {
@@ -304,7 +307,7 @@ export function createEntity(layerId: string, entityName = "Entity"): Entity {
 
 export function createBlueprint(blueprintName = "Behaviour") {
   return blueprintSchema.parse({
-    version: 1,
+    version: 2,
     id: newId(),
     name: blueprintName,
     variables: [],
