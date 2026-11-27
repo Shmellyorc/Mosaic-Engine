@@ -89,6 +89,8 @@ Choose **Ridge Workshop** from the sample’s scene list and press Play. Move wi
 
 Choose **Lantern Signal Lab** from the sample’s scene list. Move with A/D or the arrow keys to see the Animator change state. Press Space to fire the beacon, sweep the charge indicator, and trigger a particle burst and chime. Enable audio in the exported player before sending a signal.
 
+Open a `.synth` document to design a procedural sound. The Sound Designer provides six oscillators, a waveform preview, an ADSR envelope, pitch sweep, vibrato, low-pass filtering, echo, presets and seeded variations. The Music Tracker uses editable `.tracker` songs with instruments, up to 16 tracks, note effects, reusable patterns and arrangements. Both play through the shared mixer, can be triggered by Blueprint, and export PCM WAV files.
+
 ## Author project data
 
 - In **Data → Structs**, define fields and defaults. Use an enum field for registry-backed choices or a text field configured as a sheet relation for a reference to another row. **Sheets** validates unique row keys and keeps related keys in sync when a row is renamed. **Resources** edits a single named record against a struct.

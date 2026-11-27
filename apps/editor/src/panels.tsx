@@ -1,3 +1,4 @@
+import { newPatch, newTracker } from "./audio-creation";
 import { newBehaviorTree } from "./behavior-tree";
 import { newUiScreen } from "./ui-flow";
 import {
@@ -224,6 +225,39 @@ export function ProjectPanel() {
           .filter(({ name }) => matches(name))
           .map(({ id, name }) =>
             row(name + ".ui", { kind: "uiScreen", id }, Layers3),
+          )}
+      </details>
+      <details className="tree-group">
+        <summary>
+          <Folder size={15} /> Audio Creation
+          <button
+            className="icon-button push"
+            aria-label="New sound patch"
+            onClick={(event) => {
+              event.preventDefault();
+              newPatch();
+            }}
+          >
+            <Plus size={15} />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="New tracker song"
+            onClick={(event) => {
+              event.preventDefault();
+              newTracker();
+            }}
+          >
+            <Plus size={15} />
+          </button>
+        </summary>
+        {project.audioCreation?.patches
+          .filter(({ name }) => matches(name))
+          .map(({ id, name }) => row(name + ".synth", { kind: "synth", id }))}
+        {project.audioCreation?.songs
+          .filter(({ name }) => matches(name))
+          .map(({ id, name }) =>
+            row(name + ".tracker", { kind: "tracker", id }),
           )}
       </details>
       <details className="tree-group">

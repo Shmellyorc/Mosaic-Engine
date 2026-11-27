@@ -1,3 +1,4 @@
+import { audioAssets } from "@mosaic/model";
 import { parseProject, type Project } from "@mosaic/model";
 import { createRenderer, type Preference, type Renderer } from "@mosaic/render";
 import {
@@ -127,9 +128,9 @@ async function boot() {
   const audio = new AudioMixer(report);
   const audioButton =
     document.querySelector<HTMLButtonElement>("#enable-audio")!;
-  audio.configure(project.mixer);
+  audio.configure(project.mixer, project.audioCreation);
   let audioReady = false;
-  if (project.mixer?.sounds.length) {
+  if (audioAssets(project).length) {
     audioButton.hidden = false;
     audioButton.addEventListener("click", async () => {
       audioReady = await audio.unlock();

@@ -94,7 +94,7 @@ export function startTransport() {
       state.transport === "playing" &&
       (state.runId !== previous.runId || previous.transport !== "playing")
     ) {
-      audio.configure(state.project.mixer);
+      audio.configure(state.project.mixer, state.project.audioCreation);
       void audio.unlock();
     }
     if (state.transport !== "playing" && previous.transport === "playing")
@@ -127,8 +127,11 @@ export function startTransport() {
           const started = performance.now();
           if (game.reloadProject(state.project)) {
             profileReload(performance.now() - started);
-            if (state.project.mixer !== document?.mixer)
-              audio.configure(state.project.mixer);
+            if (
+              state.project.mixer !== document?.mixer ||
+              state.project.audioCreation !== document?.audioCreation
+            )
+              audio.configure(state.project.mixer, state.project.audioCreation);
             document = state.project;
             debugAt = 0;
           } else {
@@ -145,7 +148,7 @@ export function startTransport() {
       showPause(game);
       if (
         useEditor.getState().transport === "playing" &&
-        state.project.mixer?.sounds.length
+        (state.project.mixer?.sounds.length || state.project.audioCreation)
       )
         game.consumeAudio((command) => audio.dispatch(command));
       if (now >= debugAt || state.entityId !== previousEntity) {

@@ -1,4 +1,10 @@
 import {
+  MusicTracker,
+  newPatch,
+  newTracker,
+  SoundDesigner,
+} from "./audio-creation";
+import {
   useEffect,
   useRef,
   useState,
@@ -135,6 +141,8 @@ function WorkspacePanel() {
   const project = useEditor((state) => state.project);
   if (!ref || !documentInfo(project, ref))
     return <div className="panel-body muted">Open a file from Project.</div>;
+  if (ref.kind === "synth") return <SoundDesigner key={ref.id} />;
+  if (ref.kind === "tracker") return <MusicTracker key={ref.id} />;
   if (ref.kind === "behaviorTree") return <BehaviorWorkspace key={ref.id} />;
   if (ref.kind === "uiFlow") return <UiFlowWorkspace />;
   if (ref.kind === "sceneFlow") return <SceneFlowWorkspace />;
@@ -593,7 +601,18 @@ export function App() {
                   key={name}
                   data-menu-close
                   onClick={() => {
-                    if (name === "Audio") {
+                    if (
+                      name === "Sound Designer" &&
+                      !useEditor.getState().project.audioCreation?.patches
+                        .length
+                    )
+                      newPatch();
+                    else if (
+                      name === "Music Tracker" &&
+                      !useEditor.getState().project.audioCreation?.songs.length
+                    )
+                      newTracker();
+                    else if (name === "Audio") {
                       const panel = api?.getPanel("audio");
                       if (panel) panel.api.setActive();
                       else if (api) togglePanel("audio");

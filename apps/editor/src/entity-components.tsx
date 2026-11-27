@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronDown, Code2, Plus, X } from "lucide-react";
 import { type Blueprint } from "@mosaic/blueprints";
 import {
+  audioAssets,
   applyPrefabRevision,
   capturePrefab,
   createEmitter,
@@ -314,7 +315,8 @@ export function ComponentInspector({
   entity: Entity;
   scene: Scene;
 }) {
-  const sounds = useEditor((state) => state.project.mixer?.sounds);
+  const projectAudio = useEditor((state) => state.project);
+  const sounds = audioAssets(projectAudio);
   const occupied = new Set(
     scene.entities
       .filter(({ id }) => id !== entity.id)

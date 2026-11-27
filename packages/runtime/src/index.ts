@@ -27,6 +27,7 @@ import {
 } from "@mosaic/blueprints";
 import {
   emptySignals,
+  audioAssets,
   primaryAttachmentId,
   type BlueprintAttachment,
   type ComponentName,
@@ -57,6 +58,12 @@ import { NavigationGrid, NavigationWorld } from "./navigation";
 import { AnimationPlayer, MotionWorld } from "./motion";
 import { ParticleWorld } from "./particles";
 import type { AudioCommand } from "./audio";
+export {
+  encodePcmWav,
+  renderPatch,
+  renderSong,
+  SYNTH_RATE,
+} from "./audio-creation";
 export { AudioMixer } from "./audio";
 export { AnimationPlayer, sampleClip } from "./motion";
 export type { Camera } from "./camera";
@@ -433,7 +440,7 @@ export class Game {
       (id) => this.world.get(id)?.entity,
     );
     this.particles = new ParticleWorld(this.componentRows("particles"));
-    this.soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
+    this.soundIds = new Set(audioAssets(project).map(({ id }) => id));
     this.lights = [];
     this.refreshComponents();
     this.layerVisible = new Map(
@@ -597,8 +604,11 @@ export class Game {
     if (assetsChanged)
       this.assets = new Set(project.assets.map(({ id }) => id));
     if (dataChanged) this.data.reload(project.data);
-    if (previous.mixer !== project.mixer)
-      this.soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
+    if (
+      previous.mixer !== project.mixer ||
+      previous.audioCreation !== project.audioCreation
+    )
+      this.soundIds = new Set(audioAssets(project).map(({ id }) => id));
     if (oldScene.ui !== scene.ui || sceneChanged || resetUi)
       this.ui = this.createUi(
         scene,

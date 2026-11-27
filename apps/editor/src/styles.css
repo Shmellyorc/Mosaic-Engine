@@ -2277,3 +2277,75 @@ button.tree-row {
   margin-bottom: 8px;
   min-width: 0;
 }
+
+.audio-creation,
+.tracker-workspace {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 30%);
+}
+.sound-waveform {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  margin: 12px 0;
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+}
+.sound-presets,
+.tracker-controls {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 11px 0;
+}
+.sound-presets button,
+.tracker-controls button {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.tracker-grid {
+  overflow: auto;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+}
+.tracker-grid table {
+  border-collapse: collapse;
+  width: 100%;
+  color: var(--ink);
+  background: #191b29;
+}
+.tracker-grid button {
+  width: 100%;
+  min-width: 64px;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  font-family: ui-monospace, monospace;
+}
+.tracker-grid button[aria-pressed="true"] {
+  background: #41315a;
+  outline: 1px solid #ba8df4;
+  outline-offset: -1px;
+}
+.tracker-grid th,
+.tracker-grid td {
+  padding: 0;
+  border: 1px solid #2f3145;
+  text-align: center;
+}
+.tracker-grid thead {
+  background: #2b253c;
+}
+.tracker-grid tbody th {
+  width: 36px;
+  color: var(--muted);
+}
+.tracker-grid tr[data-beat="true"] {
+  background: #232639;
+}
+.tracker-order {
+  display: grid;
+  grid-template-columns: 1fr 28px 28px;
+  gap: 4px;
+  margin-bottom: 4px;
+}

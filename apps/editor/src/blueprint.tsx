@@ -67,6 +67,7 @@ import {
 } from "@mosaic/blueprints";
 import {
   createBlueprint,
+  audioAssets,
   emptySignals,
   indexCatalog,
   interactiveWidget,
@@ -1955,7 +1956,8 @@ function EffectFields({
 }) {
   const entity = useEditor(selectedEntity);
   const timelines = useEditor((state) => selectedScene(state).timelines);
-  const sounds = useEditor((state) => state.project.mixer?.sounds);
+  const projectAudio = useEditor((state) => state.project);
+  const sounds = audioAssets(projectAudio);
   const transport = [
     { id: "play", name: "Play" },
     { id: "stop", name: "Stop" },

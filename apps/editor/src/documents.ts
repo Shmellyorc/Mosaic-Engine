@@ -14,6 +14,8 @@ export const editors = [
   "Timeline",
   "Particles",
   "Audio",
+  "Sound Designer",
+  "Music Tracker",
   "Data",
   "UI",
   "UI Flow",
@@ -35,6 +37,8 @@ export type DocumentKind =
   | "animator"
   | "timeline"
   | "particles"
+  | "synth"
+  | "tracker"
   | "sound"
   | "data"
   | "ui"
@@ -61,6 +65,8 @@ const kinds = new Set<DocumentKind>([
   "image",
   "prefab",
   "sound",
+  "synth",
+  "tracker",
   "data",
   "input",
 ]);
@@ -135,6 +141,16 @@ export function documentInfo(project: Project, ref: DocumentRef) {
           ? scene.name
           : scene?.timelines?.find(({ id }) => id === ref.id)?.name;
       workspace = "Timeline";
+      break;
+    case "synth":
+      name = project.audioCreation?.patches.find(
+        ({ id }) => id === ref.id,
+      )?.name;
+      workspace = "Sound Designer";
+      break;
+    case "tracker":
+      name = project.audioCreation?.songs.find(({ id }) => id === ref.id)?.name;
+      workspace = "Music Tracker";
       break;
     case "sound":
       name = project.mixer?.sounds.find(({ id }) => id === ref.id)?.name;

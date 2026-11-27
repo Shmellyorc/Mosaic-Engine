@@ -1,4 +1,13 @@
-import { inspectWav, MASTER_BUS, type Mixer, type Sound } from "@mosaic/model";
+import { renderPatch, renderSong, SYNTH_RATE } from "./audio-creation";
+import {
+  inspectWav,
+  MASTER_BUS,
+  type AudioCreation,
+  type Mixer,
+  type Sound,
+  type SoundPatch,
+  type TrackerSong,
+} from "@mosaic/model";
 
 export type AudioCommand = {
   soundId: string;
@@ -14,7 +23,12 @@ type Voice = {
   source: AudioBufferSourceNode;
   gain: GainNode;
 };
-type CachedSound = { source: string; buffer: AudioBuffer; bytes: number };
+type AudioSource = Sound | SoundPatch | TrackerSong;
+type CachedSound = {
+  source: string | object;
+  buffer: AudioBuffer;
+  bytes: number;
+};
 const unit = (value: number, muted: boolean) => (muted ? 0 : value);
 
 export class AudioMixer {
@@ -23,28 +37,51 @@ export class AudioMixer {
   private analyzer?: AnalyserNode;
   private samples = new Float32Array(512);
   private buses = new Map<string, GainNode>();
-  private sounds = new Map<string, Sound>();
+  private sounds = new Map<string, AudioSource>();
   private voices = new Set<Voice>();
   private buffers = new Map<string, CachedSound>();
   private bufferBytes = 0;
   private disposed = false;
   private config?: Mixer;
+  private library?: AudioCreation;
 
   constructor(private report: (message: string) => void) {}
 
-  configure(config?: Mixer) {
-    if (this.config === config) return;
+  private sourceKey(sound: AudioSource | undefined) {
+    if (!sound) return undefined;
+    return "source" in sound ? sound.source : sound;
+  }
+  configure(config?: Mixer, library?: AudioCreation) {
+    if (this.config === config && this.library === library) return;
+    const patchesChanged = this.library?.patches !== library?.patches;
     this.config = config;
+    this.library = library;
     const previousSounds = this.sounds;
-    this.sounds = new Map(config?.sounds.map((sound) => [sound.id, sound]));
+    this.sounds = new Map<string, AudioSource>(
+      [
+        ...(config?.sounds ?? []),
+        ...(library?.patches ?? []),
+        ...(library?.songs ?? []),
+      ].map((sound) => [sound.id, sound]),
+    );
     for (const [id, cached] of this.buffers) {
-      if (cached.source === this.sounds.get(id)?.source) continue;
+      const sound = this.sounds.get(id);
+      if (
+        cached.source === this.sourceKey(sound) &&
+        !(patchesChanged && sound && "patterns" in sound)
+      )
+        continue;
       this.bufferBytes -= cached.bytes;
       this.buffers.delete(id);
     }
     for (const voice of this.voices) {
       const sound = this.sounds.get(voice.id);
-      if (!sound || previousSounds.get(voice.id)?.source !== sound.source)
+      if (
+        !sound ||
+        this.sourceKey(previousSounds.get(voice.id)) !==
+          this.sourceKey(sound) ||
+        (patchesChanged && "patterns" in sound)
+      )
         this.stop(voice);
       else {
         voice.gain.gain.value = sound.gain;
@@ -115,17 +152,31 @@ export class AudioMixer {
       void this.context.suspend().catch(() => undefined);
   }
 
-  private buffer(sound: Sound) {
+  private buffer(sound: AudioSource) {
     const cached = this.buffers.get(sound.id);
     if (cached) {
       this.buffers.delete(sound.id);
       this.buffers.set(sound.id, cached);
       return cached.buffer;
     }
-    const encoded = atob(sound.source.slice(sound.source.indexOf(",") + 1));
-    const bytes = new Uint8Array(encoded.length);
-    for (let i = 0; i < encoded.length; i++) bytes[i] = encoded.charCodeAt(i);
-    const { input, offset, frames, channels, rate } = inspectWav(bytes);
+    const generated =
+      "source" in sound
+        ? undefined
+        : "patterns" in sound
+          ? renderSong(sound, this.library?.patches ?? [])
+          : [renderPatch(sound)];
+    const wav =
+      "source" in sound
+        ? inspectWav(
+            Uint8Array.from(
+              atob(sound.source.slice(sound.source.indexOf(",") + 1)),
+              (character) => character.charCodeAt(0),
+            ),
+          )
+        : undefined;
+    const channels = wav?.channels ?? generated!.length;
+    const frames = wav?.frames ?? generated![0].length;
+    const rate = wav?.rate ?? SYNTH_RATE;
     const size = frames * channels * 4;
     while (this.bufferBytes + size > MAX_BUFFER_BYTES) {
       const pinned = new Set([...this.voices].map((voice) => voice.id));
@@ -139,11 +190,18 @@ export class AudioMixer {
     const buffer = this.context!.createBuffer(channels, frames, rate);
     for (let ch = 0; ch < channels; ch++) {
       const samples = buffer.getChannelData(ch);
-      for (let frame = 0; frame < frames; frame++)
-        samples[frame] =
-          input.getInt16(offset + (frame * channels + ch) * 2, true) / 32768;
+      if (generated) samples.set(generated[ch]);
+      else if (wav)
+        for (let frame = 0; frame < frames; frame++)
+          samples[frame] =
+            wav.input.getInt16(wav.offset + (frame * channels + ch) * 2, true) /
+            32768;
     }
-    this.buffers.set(sound.id, { source: sound.source, buffer, bytes: size });
+    this.buffers.set(sound.id, {
+      source: this.sourceKey(sound)!,
+      buffer,
+      bytes: size,
+    });
     this.bufferBytes += size;
     return buffer;
   }

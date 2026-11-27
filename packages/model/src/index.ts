@@ -18,6 +18,12 @@ import {
 } from "./effects";
 import { catalogSchema, validateCatalog } from "./data";
 import { uiSchema, validateUi } from "./ui";
+import {
+  audioAssets,
+  audioCreationSchema,
+  validateAudioCreation,
+} from "./audio-creation";
+export * from "./audio-creation";
 import { behaviorTreeSchema, validateBehaviorTree } from "./behavior-tree";
 export * from "./behavior-tree";
 import { uiFlowSchema, validateUiFlow } from "./ui-flow";
@@ -299,6 +305,7 @@ const projectSchema = z.object({
   prefabs: z.array(prefabSchema).max(512).optional(),
   extensions: z.array(extensionSchema).max(64).optional(),
   mixer: mixerSchema.optional(),
+  audioCreation: audioCreationSchema.optional(),
   data: catalogSchema.optional(),
   signals: z.array(signalSchema).max(256).optional(),
   input: z
@@ -370,7 +377,8 @@ export function validateProject(input: unknown): Project {
       new Set(entities.map((entity) => entity.id)),
     ]),
   );
-  const soundIds = new Set(project.mixer?.sounds.map(({ id }) => id));
+  const soundIds = new Set(audioAssets(project).map(({ id }) => id));
+  validateAudioCreation(project);
   function validateAttachments(entity: Entity, entityIds: Set<string>) {
     if (entity.behaviorTree && !behaviorTrees.has(entity.behaviorTree))
       throw new Error(
@@ -702,6 +710,7 @@ export function serializeProject(project: Project): string {
     !!project.sceneFlow ||
     !!project.uiFlow ||
     !!project.behaviorTrees?.length ||
+    !!project.audioCreation ||
     project.blueprints.some(
       ({ requires, variables }) =>
         !!requires?.length || variables.some(({ exposed }) => exposed),

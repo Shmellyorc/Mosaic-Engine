@@ -401,6 +401,16 @@ export function openEditor(workspace: Workspace) {
     case "Tilemap":
       forScene("tilemap");
       break;
+    case "Sound Designer": {
+      const sound = state.project.audioCreation?.patches[0];
+      if (sound) openDocument({ kind: "synth", id: sound.id });
+      break;
+    }
+    case "Music Tracker": {
+      const song = state.project.audioCreation?.songs[0];
+      if (song) openDocument({ kind: "tracker", id: song.id });
+      break;
+    }
     case "Timeline":
       forScene("timeline");
       break;

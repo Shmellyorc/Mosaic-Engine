@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Play, Plus, Square, Trash2, Upload } from "lucide-react";
 import {
+  audioAssets,
   createMixer,
   MASTER_BUS,
   newId,
@@ -10,7 +11,7 @@ import {
 import { AudioMixer } from "@mosaic/runtime";
 import { Field, TextField } from "./controls";
 import { importSound, interrupted } from "./files";
-import { useEditor } from "./state";
+import { openDocument, useEditor } from "./state";
 
 const defaults = createMixer();
 const report = (message: string) =>
@@ -48,6 +49,7 @@ export function AudioWorkspace({ soundId }: { soundId?: string } = {}) {
 
 function MixerEditor({ soundId }: { soundId?: string }) {
   const mixer = useEditor((state) => state.project.mixer) ?? defaults;
+  const library = useEditor((state) => state.project.audioCreation);
   const [selected, setSelected] = useState(soundId ?? "");
   const [importing, setImporting] = useState(false);
   const [level, setLevel] = useState(0);
@@ -66,8 +68,8 @@ function MixerEditor({ soundId }: { soundId?: string }) {
     };
   }, []);
   useEffect(() => {
-    preview.current?.configure(mixer);
-  }, [mixer]);
+    preview.current?.configure(mixer, library);
+  }, [mixer, library]);
 
   const edit = (recipe: (draft: Mixer) => void) =>
     useEditor.getState().edit((project) => {
@@ -184,11 +186,12 @@ function MixerEditor({ soundId }: { soundId?: string }) {
                   aria-label={"Delete " + bus.name}
                   title="Delete bus and reroute its sounds to Master"
                   onClick={() =>
-                    edit((draft) => {
-                      draft.buses = draft.buses.filter(
+                    useEditor.getState().edit((project) => {
+                      if (!project.mixer) return;
+                      project.mixer.buses = project.mixer.buses.filter(
                         ({ id }) => id !== bus.id,
                       );
-                      for (const sound of draft.sounds)
+                      for (const sound of audioAssets(project))
                         if (sound.bus === bus.id) sound.bus = MASTER_BUS;
                     })
                   }
@@ -225,6 +228,54 @@ function MixerEditor({ soundId }: { soundId?: string }) {
         <div className="effect-subtitle">
           <strong>Sounds</strong>
         </div>
+        {!soundId && !!library && (
+          <section className="effect-card">
+            <strong>Generated audio</strong>
+            {[...library.patches, ...library.songs].map((asset) => (
+              <div className="inline-actions" key={asset.id}>
+                <button
+                  onClick={() =>
+                    openDocument({
+                      kind: "patterns" in asset ? "tracker" : "synth",
+                      id: asset.id,
+                    })
+                  }
+                >
+                  {asset.name}
+                </button>
+                <button
+                  aria-label={"Audition " + asset.name}
+                  onClick={() => {
+                    const player = preview.current;
+                    if (player)
+                      void player.unlock().then((ready) => {
+                        if (ready) {
+                          player.stopAll();
+                          player.dispatch(
+                            { soundId: asset.id, playing: true },
+                            true,
+                          );
+                        }
+                      });
+                  }}
+                >
+                  <Play size={14} />
+                </button>
+                <button
+                  aria-label={"Stop " + asset.name}
+                  onClick={() =>
+                    preview.current?.dispatch({
+                      soundId: asset.id,
+                      playing: false,
+                    })
+                  }
+                >
+                  <Square size={14} />
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
         {!sound ? (
           <p className="subtle-copy">
             Import a 16-bit PCM WAV to audition it or play it from a Blueprint.
