@@ -22,7 +22,6 @@ import {
   Film,
   FolderOpen,
   Gamepad2,
-  Grid2X2,
   Image,
   Layers3,
   LayoutPanelLeft,
@@ -54,6 +53,7 @@ import {
 } from "./panels";
 import { AnimatorWorkspace, InputWorkspace } from "./systems";
 import { GamePreview, SceneViewport } from "./viewport";
+import { worldTools } from "./world";
 import {
   exportGame,
   importImage,
@@ -73,7 +73,7 @@ import {
 const icons = {
   Scene: Layers3,
   Blueprints: Braces,
-  Tilemap: Grid2X2,
+  ...worldTools,
   Animator: Film,
   UI: Monitor,
   Input: Gamepad2,
@@ -143,7 +143,11 @@ function WorkspacePanel() {
           <SceneViewport />
         </div>
       )}
-      {workspace === "Tilemap" && <SceneViewport tilemap />}
+      {workspace === "Tilemap" && <SceneViewport worldTool="Tilemap" />}
+      {workspace === "Physics" && <SceneViewport worldTool="Physics" />}
+      {workspace === "Cameras" && <SceneViewport worldTool="Cameras" />}
+      {workspace === "Navigation" && <SceneViewport worldTool="Navigation" />}
+      {workspace === "Lighting" && <SceneViewport worldTool="Lighting" />}
       {workspace === "Animator" && <AnimatorWorkspace />}
       {workspace === "UI" && (
         <div className="workspace scene-wrap">
@@ -423,6 +427,20 @@ export function App() {
     };
     const listener = api.onDidLayoutChange(save);
     return () => listener.dispose();
+  }, [api]);
+  useEffect(() => {
+    if (!api) return;
+    const show = () => {
+      const assets =
+        api.getPanel("assets") ??
+        addPanel(api, "assets", {
+          referencePanel: api.getPanel("project") ? "project" : "workspace",
+          direction: api.getPanel("project") ? "within" : "left",
+        });
+      assets.api.setActive();
+    };
+    window.addEventListener("mosaic:show-assets", show);
+    return () => window.removeEventListener("mosaic:show-assets", show);
   }, [api]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {

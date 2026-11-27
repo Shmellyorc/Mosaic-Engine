@@ -17,7 +17,9 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 
 - **Scene** creates scenes, entities and child entities. Use the dockable Inspector or Scene Settings to adjust components, layer order, camera follow and transforms. Drag visible entities to move them, Alt-drag to pan, and scroll to zoom.
 - **Blueprints** edits typed expressions, nested branches and loops, reusable functions, and scene events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block.
-- **Tilemap**, **Animator**, **UI**, and **Input** provide separate central workspaces for painting grid tiles, editing and previewing spritesheet clips, placing HUD labels, and binding keyboard axes.
+- **Tilemap**, **Physics**, **Cameras**, **Navigation**, and **Lighting** provide dedicated world workspaces with editable controls and viewport previews.
+- **Animator**, **UI**, and **Input** edit spritesheet clips, place HUD labels, and bind keyboard axes.
+- Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
 - **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring.
 
@@ -30,6 +32,16 @@ Open **File → Open Lantern Ridge Sample** for a self-contained example. Move t
 - Select an expression chip for typed controls or open **Enter expression** to use a JavaScript-style expression such as `amount * 2 + Math.abs(offset)`. The parser resolves names to stable IDs and accepts an allowlisted set of operations. Expressions support numbers, Booleans, text, vectors, entity and asset references, enum values, and typed record fields.
 - Click a tile’s breakpoint indicator or press **F9** on its header. **Step Block** in Debug executes one block and shows the current call stack and locals. Continue with **Resume** or the top-bar Play button. Blueprint edits during play recompile affected behaviours, keep compatible entity variables, and restart their update handlers on the next simulation tick. Use Restart to rerun On Start handlers.
 - Blueprint format 2 preserves functions, events and typed expression data. Format 1 blueprints still open and run. The exported player executes the same compiled logic with editor breakpoints disabled.
+
+## Author a world
+
+- **Tilemap** paints solid colors or terrain on independent layers mapped to scene render layers. Terrain can connect with generated edges or a 16-frame atlas. Atlas frames are ordered by the sum of the matching neighbor flags: north 1, east 2, south 4, west 8. Layer controls set visibility, opacity, collision participation, and traversal cost. Tile data is indexed in 16 × 16 cell chunks at runtime.
+- **Physics** sets scene gravity and world-aligned box bodies on root entities. Static bodies anchor obstacles, kinematic bodies move under Blueprint commands or assigned velocity, and dynamic bodies also respond to gravity and bounce. Sensor boxes report contact without blocking motion. Attach an entity-typed or payload-free scene event to receive contact enter and exit in the body’s Blueprint. Tile contacts use an empty entity reference.
+- **Cameras** edits the scene camera’s center, zoom, follow target and offsets, damping, dead zone, and world bounds. **Preview Game Camera** shows what the exported game will frame.
+- **Navigation** previews weighted, four-direction grid paths through tile collisions and static bodies. Add an agent to a root entity and pick a destination cell in the viewport or follow another entity’s cell. Agents follow cell centers. Physical bodies continue to interact with moving obstacles while following their route.
+- **Lighting** sets scene ambient color and adds tinted point lights that follow entities. Canvas 2D and PixiJS composite the same falloff map. Screen-space text keeps its original colors.
+
+Choose **Ridge Workshop** from the sample’s scene list and press Play. Move with the arrow keys or WASD, watch the Pathfinder route around the walls, and cross the green pressure pad to trigger the HUD event.
 
 ## Rendering and export
 
@@ -62,6 +74,6 @@ npx playwright install chromium
 npm run smoke
 ```
 
-The build writes the editor to `dist/desktop/` and the sample game to `dist/lantern-ridge.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the standalone example as run artifacts.
+The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html` and `dist/ridge-workshop.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and both offline samples as run artifacts.
 
 MIT licensed.

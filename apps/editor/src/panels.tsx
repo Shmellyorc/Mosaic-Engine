@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createEntity, createScene, newId, type Entity } from "@mosaic/model";
+import { resizeMap, WorldInspector } from "./world";
 import { BlueprintInspector, revealBlock, symbolName } from "./blueprint";
 import { displayValue, typeOf } from "@mosaic/blueprints";
 import { Field, NumberField, Section, TextField } from "./controls";
@@ -74,8 +75,10 @@ function removeEntity(id: string) {
     const entity = scene.entities.find((item) => item.id === id);
     if (!entity) return;
     scene.entities = scene.entities.filter((item) => item.id !== id);
-    for (const child of scene.entities)
+    for (const child of scene.entities) {
       if (child.parentId === id) child.parentId = entity.parentId;
+      if (child.navigation?.target === id) child.navigation.target = null;
+    }
     if (scene.camera.follow === id) scene.camera.follow = null;
   });
   useEditor.setState({ entityId: null });
@@ -91,6 +94,7 @@ export function ProjectPanel() {
   const project = useEditor((state) => state.project);
   const scene = useEditor(selectedScene);
   const blueprint = useEditor((state) => state.blueprintId);
+  const asset = useEditor((state) => state.selectedAssetId);
   const [query, setQuery] = useState("");
   const matches = (name: string) =>
     name.toLowerCase().includes(query.toLowerCase());
@@ -174,10 +178,18 @@ export function ProjectPanel() {
         {project.assets
           .filter((item) => matches(item.name))
           .map((item) => (
-            <div key={item.id} className="tree-row">
+            <button
+              key={item.id}
+              className={`tree-row ${asset === item.id ? "selected" : ""}`}
+              title={"Preview " + item.name}
+              onClick={() => {
+                useEditor.setState({ selectedAssetId: item.id });
+                window.dispatchEvent(new Event("mosaic:show-assets"));
+              }}
+            >
               <FileImage size={15} />
               <span>{item.name}</span>
-            </div>
+            </button>
           ))}
         {!project.assets.length && (
           <small className="tree-empty">No images</small>
@@ -190,27 +202,35 @@ export function ProjectPanel() {
 export function AssetPanel({ onImport }: { onImport: () => void }) {
   const assets = useEditor((state) => state.project.assets);
   const selected = useEditor(selectedEntity);
+  const selectedAssetId = useEditor((state) => state.selectedAssetId);
+  const asset = assets.find((item) => item.id === selectedAssetId);
+  const alreadyAssigned =
+    selected?.visual?.kind === "sprite" &&
+    selected.visual.assetId === asset?.id;
   return (
     <div className="panel-body asset-panel">
       <button className="section-button" onClick={onImport}>
         <Upload size={15} /> Import image
       </button>
       <div className="asset-grid">
-        {assets.map((asset) => (
+        {assets.map((item) => (
           <button
-            key={asset.id}
-            className={
-              selected?.visual?.kind === "sprite" &&
-              selected.visual.assetId === asset.id
-                ? "selected"
-                : ""
-            }
-            title={
-              selected
-                ? `Assign ${asset.name} to ${selected.name}`
-                : "Select an entity to assign an image"
-            }
-            disabled={!selected}
+            key={item.id}
+            className={item.id === selectedAssetId ? "selected" : ""}
+            aria-pressed={item.id === selectedAssetId}
+            onClick={() => useEditor.setState({ selectedAssetId: item.id })}
+          >
+            <img src={item.source} alt="" />
+            <span>{item.name}</span>
+          </button>
+        ))}
+      </div>
+      {asset && (
+        <section className="asset-details" aria-label="Asset preview">
+          <strong>{asset.name}</strong>
+          <img src={asset.source} alt={asset.name} />
+          <button
+            disabled={!selected || alreadyAssigned}
             onClick={() =>
               editEntity((entity) => {
                 entity.visual = { kind: "sprite", assetId: asset.id };
@@ -218,11 +238,14 @@ export function AssetPanel({ onImport }: { onImport: () => void }) {
               })
             }
           >
-            <img src={asset.source} alt="" />
-            <span>{asset.name}</span>
+            {alreadyAssigned
+              ? "Assigned to " + selected?.name
+              : selected
+                ? "Assign to " + selected.name
+                : "Select an entity to assign"}
           </button>
-        ))}
-      </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -323,6 +346,14 @@ const transforms = [
 ] as const;
 export function InspectorPanel() {
   const workspace = useEditor((state) => state.workspace);
+  if (
+    workspace === "Tilemap" ||
+    workspace === "Physics" ||
+    workspace === "Cameras" ||
+    workspace === "Navigation" ||
+    workspace === "Lighting"
+  )
+    return <WorldInspector tool={workspace} />;
   return workspace === "Blueprints" ? (
     <BlueprintInspector />
   ) : (
@@ -376,6 +407,7 @@ function EntityInspector() {
           <select
             aria-label="Entity parent"
             value={entity.parentId ?? ""}
+            disabled={!!entity.body || !!entity.navigation}
             onChange={(event) =>
               editEntity((draft) => {
                 draft.parentId = event.target.value || null;
@@ -778,12 +810,7 @@ export function SceneSettings() {
               max={key === "size" ? 128 : 256}
               onChange={(value) =>
                 editScene((draft) => {
-                  draft.tilemap[key] = value;
-                  draft.tilemap.tiles = draft.tilemap.tiles.filter(
-                    (tile) =>
-                      tile.x < draft.tilemap.width &&
-                      tile.y < draft.tilemap.height,
-                  );
+                  resizeMap(draft, key, value);
                 })
               }
             />

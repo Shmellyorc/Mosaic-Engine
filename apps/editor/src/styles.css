@@ -1434,3 +1434,40 @@ button.tree-row {
   min-width: 0;
   flex: 1;
 }
+
+.workspace-tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.workspace-tabs > button {
+  flex: 0 0 auto;
+}
+.asset-details {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--edge);
+}
+.asset-details > img {
+  width: 100%;
+  height: 72px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  background: #10121f;
+  border-radius: 5px;
+}
+.asset-details strong {
+  overflow-wrap: anywhere;
+}
+.world-overlay {
+  pointer-events: none;
+}
+.world-inspector select {
+  max-width: 100%;
+}
+@media (max-width: 1200px) {
+  .workspace-tabs > button {
+    padding-inline: 8px;
+  }
+}

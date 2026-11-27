@@ -2,7 +2,12 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseProject } from "@mosaic/model";
+import {
+  createEntity,
+  createProject,
+  parseProject,
+  serializeProject,
+} from "@mosaic/model";
 
 const url = "http://127.0.0.1:5188";
 async function editor(page: Page, renderer: "canvas" | "auto" = "canvas") {
@@ -543,4 +548,198 @@ test("authors a function and timed event loop, steps through it, and exports the
     )
     .toEqual({ title: false, controls: true });
   await player.close();
+});
+
+test("edits and saves each world workspace, and opens assets without applying them", async ({
+  page,
+}) => {
+  await editor(page);
+  const projectTree = page.locator(".project-panel");
+  const inspector = page.locator(".world-inspector");
+  const workspace = (name: string) =>
+    page
+      .getByRole("navigation", { name: "Engine workspaces" })
+      .getByRole("button", { name, exact: true });
+  const number = async (name: string, value: string) => {
+    const field = inspector.getByLabel(name, { exact: true });
+    await field.fill(value);
+    await field.press("Enter");
+    await expect(field).toHaveValue(value);
+  };
+
+  await projectTree
+    .getByRole("button", { name: "Ridge panorama", exact: true })
+    .click();
+  const preview = page.getByRole("region", { name: "Asset preview" });
+  await expect(
+    preview.getByRole("img", { name: "Ridge panorama" }),
+  ).toBeVisible();
+  await expect(
+    preview.getByRole("button", { name: "Assign to Lantern Keeper" }),
+  ).toBeEnabled();
+  await page.getByRole("tab", { name: "Project", exact: true }).click();
+  await projectTree
+    .getByRole("button", { name: "Ridge Workshop", exact: true })
+    .click();
+  await workspace("Tilemap").click();
+  await inspector.getByRole("button", { name: "Add Tile Layer" }).click();
+  await inspector.getByRole("button", { name: "Add Terrain" }).click();
+  const terrain = inspector.getByLabel("Terrain name");
+  await terrain.fill("Test Stone");
+  await terrain.press("Enter");
+  await inspector.getByLabel("Solid terrain").check();
+  await number("Traversal cost", "7");
+  const tilemap = page.getByLabel("Tilemap viewport", { exact: true });
+  const box = (await tilemap.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.83, box.y + box.height * 0.24);
+
+  await workspace("Physics").click();
+  await expect(page.getByTestId("physics-overlay")).toBeVisible();
+  await number("Gravity Y", "320");
+  await inspector
+    .getByLabel("World entity")
+    .selectOption({ label: "Falling Crate" });
+  await expect(inspector.getByLabel("Body type")).toHaveValue("dynamic");
+  await number("Initial velocity X", "12");
+
+  await workspace("Cameras").click();
+  await expect(page.getByTestId("camera-overlay")).toBeVisible();
+  await number("Follow damping", "9");
+  await page.getByRole("button", { name: "Preview Game Camera" }).click();
+  await expect(
+    page.getByRole("button", { name: "Preview Game Camera" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await workspace("Navigation").click();
+  await inspector
+    .getByLabel("World entity")
+    .selectOption({ label: "Pathfinder" });
+  await expect(
+    page.getByTestId("navigation-overlay").locator("polyline"),
+  ).toBeVisible();
+  await number("Agent speed", "120");
+  const pick = page.getByRole("button", { name: "Pick Destination" });
+  await pick.click();
+  await expect(
+    page.getByRole("button", { name: "Click Destination" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  const nav = (await page
+    .getByLabel("Navigation viewport", { exact: true })
+    .boundingBox())!;
+  await page.mouse.click(nav.x + nav.width * 0.56, nav.y + nav.height * 0.74);
+  await expect(pick).toBeVisible();
+
+  await workspace("Lighting").click();
+  await inspector
+    .getByLabel("World entity")
+    .selectOption({ label: "Pressure Pad" });
+  await expect(
+    page.getByTestId("lighting-overlay").locator("circle"),
+  ).toBeVisible();
+  await number("Light radius", "132");
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  const stored = await readFile((await (await download).path())!, "utf8");
+  const saved = parseProject(stored);
+  const scene = saved.scenes.find((entry) => entry.id === "ridge-workshop")!;
+  const painted = scene.tilemap.terrains?.find(
+    (item) => item.name === "Test Stone",
+  );
+  expect(painted).toMatchObject({ solid: true, cost: 7 });
+  expect(scene.tilemap.layers?.at(-1)?.tiles).toEqual([
+    expect.objectContaining({ terrainId: painted!.id }),
+  ]);
+  expect(scene.gravity?.y).toBe(320);
+  expect(scene.camera.damping).toBe(9);
+  const ranger = scene.entities.find(
+    (entity) => entity.id === "workshop-ranger",
+  )!;
+  expect(ranger.navigation?.speed).toBe(120);
+  expect(ranger.navigation?.x).not.toBe(496);
+  expect(
+    scene.entities.find((entity) => entity.id === "workshop-pad")?.light
+      ?.radius,
+  ).toBe(132);
+  expect(
+    saved.scenes[0].entities.find((entity) => entity.id === "player")?.visual,
+  ).toMatchObject({ assetId: "keeper-art" });
+
+  const chooser = page.waitForEvent("filechooser");
+  await fileMenu(page, "Open Project");
+  await (
+    await chooser
+  ).setFiles({
+    name: "workshop.mosaic.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(stored),
+  });
+  await expect(
+    page.getByText("Project opened.", { exact: true }),
+  ).toBeVisible();
+  await projectTree
+    .getByRole("button", { name: "Ridge Workshop", exact: true })
+    .click();
+  await workspace("Physics").click();
+  await expect(inspector.getByLabel("Gravity Y")).toHaveValue("320");
+});
+
+test("the offline world uses the same point lighting in PixiJS and Canvas 2D", async ({
+  page,
+  context,
+}, testInfo) => {
+  const base = await readFile(resolve("dist/ridge-workshop.html"), "utf8");
+  const fixture = createProject("Light verification");
+  const scene = fixture.scenes[0];
+  scene.background = "#808080";
+  scene.lighting = { enabled: true, ambient: "#303030" };
+  const lamp = createEntity(scene.layers[0].id, "Lamp");
+  Object.assign(lamp.transform, { x: 224, y: 180 });
+  lamp.visual = null;
+  lamp.light = { radius: 110, intensity: 0.9, color: "#ffcc88", enabled: true };
+  scene.entities.push(lamp);
+  const fixtureHtml = base.replace(
+    /(<script id="mosaic-project" type="application\/json">)[\s\S]*?(<\/script>)/,
+    (_all, open, close) =>
+      open + serializeProject(fixture).replaceAll("<", "\\u003c") + close,
+  );
+  const filename = testInfo.outputPath("light-verification.html");
+  await writeFile(filename, fixtureHtml);
+  await context.setOffline(true);
+  await page.goto(pathToFileURL(filename).href);
+  const status = page.locator("#runtime-status");
+  await expect(status).toHaveText("PixiJS accelerated");
+  const canvas = page.locator("#game canvas");
+  const points: [number, number][] = [
+    [0.35, 0.5],
+    [0.4, 0.5],
+    [0.75, 0.5],
+  ];
+  let pixi: number[][] = [];
+  await expect
+    .poll(async () => {
+      pixi = await pixels(canvas, points);
+      return pixi[0][0] - pixi[2][0];
+    })
+    .toBeGreaterThan(65);
+  await page.locator("#backend").selectOption("canvas");
+  await expect(status).toHaveText("Canvas 2D");
+  let canvas2d: number[][] = [];
+  await expect
+    .poll(async () => {
+      canvas2d = await pixels(canvas, points);
+      return canvas2d[0][0] - canvas2d[2][0];
+    })
+    .toBeGreaterThan(65);
+  expect(pixi[2][0]).toBeCloseTo(24, 0);
+  for (let i = 0; i < points.length; i++)
+    for (let channel = 0; channel < 3; channel++) {
+      expect(
+        Math.abs(pixi[i][channel] - canvas2d[i][channel]),
+      ).toBeLessThanOrEqual(4);
+    }
+  await page.goto(pathToFileURL(resolve("dist/ridge-workshop.html")).href);
+  await expect(page.locator("#game-title")).toHaveText("Ridge Workshop");
+  await expect(page.locator("#game canvas")).toBeVisible();
+  await expect(page.locator("#runtime-error")).toBeEmpty();
 });

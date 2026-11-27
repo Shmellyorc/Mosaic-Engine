@@ -19,10 +19,17 @@ import {
   type RenderFrame,
 } from "@mosaic/runtime";
 import type { Project, Scene, Tile } from "@mosaic/model";
-import { chooseEntity, editScene, selectedScene, useEditor } from "./state";
+import {
+  chooseEntity,
+  editEntity,
+  editScene,
+  selectedScene,
+  useEditor,
+} from "./state";
 import { playGame } from "./play";
 
-const colorOf = (value: string) => value;
+import { type WorldTool } from "./world";
+import { WorldOverlay } from "./world-overlay";
 export function RenderSurface({
   assets,
   getFrame,
@@ -193,17 +200,17 @@ function viewCamera(scene: Scene) {
 }
 
 export function SceneViewport({
-  tilemap = false,
+  worldTool,
   ui = false,
 }: {
-  tilemap?: boolean;
+  worldTool?: WorldTool;
   ui?: boolean;
 }) {
   const scene = useEditor(selectedScene);
   return (
     <SceneViewportContent
-      key={`${scene.id}-${tilemap}-${ui}`}
-      tilemap={tilemap}
+      key={`${scene.id}-${worldTool}-${ui}`}
+      worldTool={worldTool}
       ui={ui}
       scene={scene}
     />
@@ -211,18 +218,30 @@ export function SceneViewport({
 }
 
 function SceneViewportContent({
-  tilemap,
+  worldTool,
   ui,
   scene,
 }: {
-  tilemap: boolean;
+  worldTool?: WorldTool;
   ui: boolean;
   scene: Scene;
 }) {
+  const tilemap = worldTool === "Tilemap";
   const project = useEditor((state) => state.project);
   const entityId = useEditor((state) => state.entityId);
   const [orientation, setOrientation] = useState<Camera | null>(null);
-  const camera = orientation ?? viewCamera(scene);
+  const [framing, setFraming] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const activeTileLayer = useEditor((state) => state.activeTileLayer);
+  const activeTerrain = useEditor((state) => state.activeTerrain);
+  const layer = scene.tilemap.layers?.find(
+    (item) => item.id === activeTileLayer,
+  );
+  const terrain = scene.tilemap.terrains?.find(
+    (item) => item.id === activeTerrain,
+  );
+  const focused = scene.entities.find((item) => item.id === entityId);
+  const previousCell = useRef<{ x: number; y: number } | undefined>(undefined);
   const [tool, setTool] = useState<"select" | "pan">("select");
   const [brush, setBrush] = useState("#859c72");
   const [erase, setErase] = useState(false);
@@ -239,6 +258,7 @@ function SceneViewportContent({
     () => new Game(project, scene.id),
     [project, scene.id],
   );
+  const camera = orientation ?? (framing ? author.view() : viewCamera(scene));
   const frame = useMemo(() => author.frame(camera), [author, camera]);
   const selected = findDraw(frame, entityId);
   const fit = fitFrame(
@@ -279,15 +299,45 @@ function SceneViewportContent({
       ((point.y - project.height / 2) / camera.zoom + camera.y) /
         scene.tilemap.size,
     );
-    if (x < 0 || y < 0 || x >= scene.tilemap.width || y >= scene.tilemap.height)
+    if (
+      x < 0 ||
+      y < 0 ||
+      x >= scene.tilemap.width ||
+      y >= scene.tilemap.height
+    ) {
+      previousCell.current = undefined;
       return;
-    strokes.current.set(y * scene.tilemap.width + x, { x, y, color: brush });
+    }
+    let { x: prevX, y: prevY } = previousCell.current ?? { x, y };
+    const dx = Math.abs(x - prevX),
+      dy = -Math.abs(y - prevY);
+    let error = dx + dy;
+    while (true) {
+      strokes.current.set(prevY * scene.tilemap.width + prevX, {
+        x: prevX,
+        y: prevY,
+        color: terrain?.color ?? brush,
+        ...(terrain ? { terrainId: terrain.id } : {}),
+      });
+      if (prevX === x && prevY === y) break;
+      const twice = 2 * error;
+      if (twice >= dy) {
+        error += dy;
+        prevX += Math.sign(x - prevX);
+      }
+      if (twice <= dx) {
+        error += dx;
+        prevY += Math.sign(y - prevY);
+      }
+    }
+    previousCell.current = { x, y };
     setPending([...strokes.current.values()]);
   }
   function begin(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 && event.button !== 1) return;
-    if (tilemap && tool === "select" && event.button === 0) {
+    if (tilemap && tool === "select" && event.button === 0 && !event.altKey) {
       strokes.current.clear();
+      previousCell.current = undefined;
       event.currentTarget.setPointerCapture(event.pointerId);
       paint(event);
       return;
@@ -303,6 +353,19 @@ function SceneViewportContent({
       return;
     }
     const point = coordinates(event.clientX, event.clientY);
+    if (worldTool === "Navigation" && picking && focused?.navigation) {
+      const x = (point.x - project.width / 2) / camera.zoom + camera.x;
+      const y = (point.y - project.height / 2) / camera.zoom + camera.y;
+      editEntity((draft) => {
+        if (draft.navigation) {
+          draft.navigation.x = Math.round(x);
+          draft.navigation.y = Math.round(y);
+          draft.navigation.target = null;
+        }
+      });
+      setPicking(false);
+      return;
+    }
     const match = pickEntity(frame, point.x, point.y);
     const entity = scene.entities.find(
       (item) => item.id === match && (!ui || item.visual?.kind === "text"),
@@ -354,8 +417,11 @@ function SceneViewportContent({
       setPending([]);
       if (!cancel)
         editScene((draft) => {
+          const target =
+            draft.tilemap.layers?.find((item) => item.id === layer?.id) ??
+            draft.tilemap;
           const existing = new Map(
-            draft.tilemap.tiles.map((tile) => [
+            target.tiles.map((tile) => [
               tile.y * draft.tilemap.width + tile.x,
               tile,
             ]),
@@ -364,7 +430,7 @@ function SceneViewportContent({
             if (erase) existing.delete(index);
             else existing.set(index, cell);
           }
-          draft.tilemap.tiles = [...existing.values()];
+          target.tiles = [...existing.values()];
         });
       return;
     }
@@ -433,7 +499,7 @@ function SceneViewportContent({
   return (
     <div className="workspace scene-workspace">
       <div className="workspace-bar">
-        <strong>{ui ? "UI Canvas" : tilemap ? "Tilemap" : scene.name}</strong>
+        <strong>{ui ? "UI Canvas" : (worldTool ?? scene.name)}</strong>
         <div className="bar-group">
           <button
             aria-label={
@@ -459,8 +525,9 @@ function SceneViewportContent({
             <input
               aria-label="Tile brush color"
               type="color"
-              value={brush}
-              onChange={(event) => setBrush(colorOf(event.target.value))}
+              disabled={!!terrain}
+              value={terrain?.color ?? brush}
+              onChange={(event) => setBrush(event.target.value)}
             />
             <button
               onClick={() => {
@@ -472,6 +539,29 @@ function SceneViewportContent({
               {erase ? "Eraser" : "Paint"}
             </button>
           </div>
+        )}
+        {worldTool === "Cameras" && (
+          <button
+            aria-pressed={framing}
+            onClick={() => {
+              setFraming(!framing);
+              setOrientation(null);
+            }}
+          >
+            Preview Game Camera
+          </button>
+        )}
+        {worldTool === "Navigation" && (
+          <button
+            disabled={!focused?.navigation}
+            aria-pressed={picking}
+            onClick={() => {
+              setPicking(!picking);
+              setTool("select");
+            }}
+          >
+            {picking ? "Click Destination" : "Pick Destination"}
+          </button>
         )}
         <div className="bar-group push">
           <button aria-label="Zoom out" onClick={() => zoomBy(0.8)}>
@@ -501,7 +591,7 @@ function SceneViewportContent({
           assets={project.assets}
           getFrame={draw}
           surface={surface}
-          label={tilemap ? "Tilemap viewport" : "Scene viewport"}
+          label={worldTool ? worldTool + " viewport" : "Scene viewport"}
         />
         <svg
           className="viewport-overlay"
@@ -509,6 +599,17 @@ function SceneViewportContent({
           aria-hidden="true"
           preserveAspectRatio="xMidYMid meet"
         >
+          {worldTool && (
+            <WorldOverlay
+              tool={worldTool}
+              scene={scene}
+              selected={focused}
+              width={project.width}
+              height={project.height}
+              camera={camera}
+              game={author}
+            />
+          )}
           {tilemap && (
             <>
               <defs>
@@ -580,7 +681,7 @@ function SceneViewportContent({
       <div className="panel-foot">
         <Crosshair size={13} />{" "}
         {tilemap
-          ? `${scene.tilemap.width} × ${scene.tilemap.height} cells • ${scene.tilemap.size}px grid`
+          ? `${layer?.name ?? "Base layer"} • ${terrain?.name ?? "Flat color"} • ${scene.tilemap.width} × ${scene.tilemap.height} cells`
           : `${project.width} × ${project.height} • Drag to move · Alt-drag to pan`}
       </div>
     </div>

@@ -50,6 +50,8 @@ export class BlueprintScheduler {
   private cursor = 0;
   private sleeping: Job[] = [];
   private deliveries: Delivery[] = [];
+  private contacts: { signalId: string; entityId: string; payload?: Value }[] =
+    [];
   private listeners = new Map<string, { binding: Binding; entry: Entry }[]>();
   private updates: { binding: Binding; entry: Entry }[] = [];
   private updating = new Map<Binding, Set<Entry>>();
@@ -82,6 +84,10 @@ export class BlueprintScheduler {
       this.deliveries = this.deliveries.filter(
         ({ source }) => !changed.has(source),
       );
+      const changedEntities = new Set(Array.from(changed, ({ id }) => id));
+      this.contacts = this.contacts.filter(
+        ({ entityId }) => !changedEntities.has(entityId),
+      );
       if (this.pause && changed.has(this.pause.job.binding))
         this.pause = undefined;
     }
@@ -109,6 +115,20 @@ export class BlueprintScheduler {
     this.emitted = 0;
     this.delivered = 0;
     this.activeBlocks.clear();
+    for (const contact of this.contacts) {
+      for (const { binding, entry } of this.listeners.get(contact.signalId) ??
+        []) {
+        if (binding.id !== contact.entityId) continue;
+        if (
+          this.signalJobs >= MAX_SIGNAL_JOBS ||
+          this.delivered >= MAX_DELIVERIES_PER_TICK
+        )
+          break;
+        this.delivered++;
+        this.enqueue(binding, entry, contact.payload);
+      }
+    }
+    this.contacts = [];
     const sleeping: Job[] = [];
     for (const job of this.sleeping) {
       if (job.wake <= this.tick) this.ready.push(job);
@@ -118,6 +138,13 @@ export class BlueprintScheduler {
     for (const { binding, entry } of this.updates) {
       if (!this.updating.get(binding)?.has(entry)) this.enqueue(binding, entry);
     }
+  }
+  queueContact(signalId: string, entityId: string, payload?: Value) {
+    if (
+      this.listeners.has(signalId) &&
+      this.contacts.length < MAX_DELIVERIES_PER_TICK
+    )
+      this.contacts.push({ signalId, entityId, payload });
   }
   private enqueue(binding: Binding, entry: Entry, payload?: Value) {
     if (entry.kind === "update") {

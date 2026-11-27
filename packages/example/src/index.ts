@@ -1,3 +1,9 @@
+import {
+  WORKSHOP_ID,
+  workshopBlueprints,
+  workshopScene,
+  workshopSignal,
+} from "./workshop";
 import { literal, type Block, type Expression } from "@mosaic/blueprints";
 import { createEntity, type Entity, type Project } from "@mosaic/model";
 import landscape from "../assets/ridge.png?inline";
@@ -123,7 +129,10 @@ export function exampleProject(): Project {
     width: 640,
     height: 360,
     startSceneId: "ridge-scene",
-    signals: [{ id: "beacon-glow", name: "Beacon Glow", type: "boolean" }],
+    signals: [
+      { id: "beacon-glow", name: "Beacon Glow", type: "boolean" },
+      workshopSignal,
+    ],
     assets: [
       { id: "ridge-art", name: "Ridge panorama", source: landscape },
       { id: "keeper-art", name: "Lantern spritesheet", source: sheet },
@@ -156,6 +165,7 @@ export function exampleProject(): Project {
         entities: [world, player, beacon, label, controls],
         tilemap: { width: 40, height: 20, size: tileSize, tiles: [] },
       },
+      workshopScene(player),
     ],
     blueprints: [
       {
@@ -260,6 +270,15 @@ export function exampleProject(): Project {
           },
         ],
       },
+      ...workshopBlueprints,
     ],
+  };
+}
+
+export function workshopProject(): Project {
+  return {
+    ...exampleProject(),
+    name: "Ridge Workshop",
+    startSceneId: WORKSHOP_ID,
   };
 }

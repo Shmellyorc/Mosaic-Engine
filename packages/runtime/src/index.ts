@@ -17,6 +17,23 @@ import {
   type Scene,
 } from "@mosaic/model";
 import { BlueprintScheduler, type Binding } from "./blueprints";
+import { cameraView, type Camera } from "./camera";
+import {
+  autotileFrame,
+  TileWorld,
+  NORTH,
+  EAST,
+  SOUTH,
+  WEST,
+  type TileGrid,
+} from "./tiles";
+import { PhysicsWorld } from "./physics";
+import { NavigationGrid, NavigationWorld } from "./navigation";
+export type { Camera } from "./camera";
+export { TileWorld, TileGrid, autotileFrame, TILE_CHUNK_SIZE } from "./tiles";
+export { cameraView } from "./camera";
+export { PhysicsWorld, bodyRect } from "./physics";
+export { NavigationGrid, entityCenter } from "./navigation";
 export type { BlueprintPause } from "./blueprints";
 
 export const STEP = 1 / 60;
@@ -28,7 +45,6 @@ export type Matrix2D = {
   x: number;
   y: number;
 };
-export type Camera = { x: number; y: number; zoom: number };
 export type RuntimeLog = {
   level: "info" | "error";
   message: string;
@@ -46,11 +62,23 @@ export type Draw = {
   | { kind: "sprite"; assetId: string; frame?: Frame }
   | { kind: "text"; text: string; color: string; size: number }
 );
+export type LightingPass = {
+  ambient: string;
+  worldDraws: number;
+  lights: {
+    x: number;
+    y: number;
+    radius: number;
+    color: string;
+    intensity: number;
+  }[];
+};
 export type RenderFrame = {
   width: number;
   height: number;
   background: string;
   draws: Draw[];
+  lighting?: LightingPass;
 };
 type WorldEntity = {
   entity: Entity;
@@ -183,7 +211,14 @@ export class Game {
   }
   private started = false;
   private accumulator = 0;
-  private tiles = new Map<number, Scene["tilemap"]["tiles"][number]>();
+  private tiles: TileWorld;
+  private physics: PhysicsWorld;
+  private navigation: NavigationWorld;
+  private currentCamera?: Camera;
+  private signalTypes = new Map<string, Signal["type"]>();
+  private lights: WorldEntity[];
+  private layerOrder: Map<string, number>;
+  private layerVisible: Map<string, boolean>;
   time = 0;
 
   constructor(
@@ -195,17 +230,16 @@ export class Game {
     if (!scene) throw new Error("Scene could not be found.");
     this.scene = scene;
     this.input = new InputState(project.input);
-    for (const cell of scene.tilemap.tiles)
-      this.tiles.set(cell.y * scene.tilemap.width + cell.x, cell);
+    this.tiles = new TileWorld(scene.tilemap);
     this.scheduler = new BlueprintScheduler(STEP, debug);
     this.assets = new Set(project.assets.map((asset) => asset.id));
     this.signals = project.signals ?? emptySignals;
-    const layerOrder = new Map(
+    this.layerOrder = new Map(
       scene.layers.map((layer, index) => [layer.id, index]),
     );
     const sorted = [...scene.entities].sort(
       (a, b) =>
-        layerOrder.get(a.layerId)! - layerOrder.get(b.layerId)! ||
+        this.layerOrder.get(a.layerId)! - this.layerOrder.get(b.layerId)! ||
         a.order - b.order,
     );
     this.entities = sorted.map((source) => {
@@ -219,6 +253,16 @@ export class Game {
       this.world.set(entity.id, state);
       return state;
     });
+    const entities = this.entities.map(({ entity }) => entity);
+    this.physics = new PhysicsWorld(entities, this.tiles, scene.gravity);
+    this.navigation = new NavigationWorld(
+      new NavigationGrid(this.tiles, entities),
+      entities,
+    );
+    this.lights = this.entities.filter(({ entity }) => entity.light);
+    this.layerVisible = new Map(
+      scene.layers.map((layer) => [layer.id, layer.visible]),
+    );
     this.reloadBlueprints(project.blueprints, this.signals);
   }
 
@@ -282,6 +326,9 @@ export class Game {
     });
     this.documents = documents;
     this.signals = signals;
+    this.signalTypes = new Map(
+      signals.map((signal) => [signal.id, signal.type]),
+    );
     this.scheduler.configure(this.program, changed);
   }
 
@@ -291,6 +338,7 @@ export class Game {
       axis: (id) => this.input.axis(id),
       variables: state.variables,
       move: (x, y) => {
+        if (this.physics.request(entity.id, x * STEP, y * STEP)) return;
         this.set(entity, "x", entity.transform.x + x * STEP);
         this.set(entity, "y", entity.transform.y + y * STEP);
       },
@@ -390,6 +438,27 @@ export class Game {
   private finishTick() {
     if (this.scheduler.paused || !this.tickPending) return;
     this.tickPending = false;
+    this.navigation.step(STEP, this.physics);
+    this.physics.step(STEP, ({ entityId, otherId, phase }) => {
+      const body = this.world.get(entityId)?.entity.body;
+      const signal = phase === "enter" ? body?.enterSignal : body?.exitSignal;
+      if (!signal) return;
+      const type = this.signalTypes.get(signal);
+      if (type === "void" || type === "entity")
+        this.scheduler.queueContact(
+          signal,
+          entityId,
+          type === "entity" ? { kind: "entity", id: otherId ?? "" } : undefined,
+        );
+    });
+    this.currentCamera = cameraView(
+      this.scene.camera,
+      this.cameraTarget(),
+      this.project.width,
+      this.project.height,
+      this.currentCamera,
+      STEP,
+    );
     for (const state of this.entities) if (state.clip) state.elapsed += STEP;
     this.time += STEP;
   }
@@ -420,9 +489,6 @@ export class Game {
   }
 
   private transforms() {
-    const layers = new Map(
-      this.scene.layers.map((layer) => [layer.id, layer.visible]),
-    );
     const resolved = new Map<string, WorldTransform>();
     for (const state of this.entities) {
       const chain: Entity[] = [];
@@ -454,7 +520,7 @@ export class Game {
           matrix: parent ? multiply(parent.matrix, local) : local,
           alpha: (parent?.alpha ?? 1) * t.alpha,
           visible: Boolean(
-            layers.get(child.layerId) &&
+            this.layerVisible.get(child.layerId) &&
             child.visible &&
             (parent?.visible ?? true),
           ),
@@ -464,18 +530,34 @@ export class Game {
     return resolved;
   }
 
+  worldPoint(id: string) {
+    const entity = this.world.get(id)?.entity;
+    if (!entity) return undefined;
+    return entity.parentId
+      ? this.transforms().get(entity.id)?.matrix
+      : entity.transform;
+  }
+  private cameraTarget() {
+    return this.scene.camera.follow
+      ? this.worldPoint(this.scene.camera.follow)
+      : undefined;
+  }
+  view() {
+    return (
+      this.currentCamera ??
+      cameraView(
+        this.scene.camera,
+        this.cameraTarget(),
+        this.project.width,
+        this.project.height,
+      )
+    );
+  }
+
   frame(cameraOverride?: Camera): RenderFrame {
     const { width, height } = this.project;
     const transforms = this.transforms();
-    const { camera, tilemap } = this.scene;
-    const target = camera.follow
-      ? transforms.get(camera.follow)?.matrix
-      : undefined;
-    const view = cameraOverride ?? {
-      x: target?.x ?? camera.x,
-      y: target ? target.y + camera.offsetY : camera.y,
-      zoom: camera.zoom,
-    };
+    const view = cameraOverride ?? this.view();
     const cameraMatrix = {
       a: view.zoom,
       b: 0,
@@ -486,39 +568,73 @@ export class Game {
     };
     const draws: Draw[] = [];
     const hud: Draw[] = [];
-    let tilesDrawn = false;
-    const pushTiles = () => {
-      tilesDrawn = true;
-      if (!this.tiles.size) return;
-      const { size } = tilemap;
-      const x0 = Math.max(0, Math.floor(-cameraMatrix.x / view.zoom / size));
-      const y0 = Math.max(0, Math.floor(-cameraMatrix.y / view.zoom / size));
-      const x1 = Math.min(
-        tilemap.width - 1,
-        Math.floor((width - cameraMatrix.x) / view.zoom / size),
-      );
-      const y1 = Math.min(
-        tilemap.height - 1,
-        Math.floor((height - cameraMatrix.y) / view.zoom / size),
-      );
-      for (let y = y0; y <= y1; y++)
-        for (let x = x0; x <= x1; x++) {
-          const tile = this.tiles.get(y * tilemap.width + x);
-          if (tile)
-            draws.push({
-              kind: "rect",
-              color: tile.color,
-              width: size,
-              height: size,
-              alpha: 1,
-              matrix: multiply(cameraMatrix, translation(x * size, y * size)),
-            });
-        }
+    const area = {
+      x: -cameraMatrix.x / view.zoom,
+      y: -cameraMatrix.y / view.zoom,
+      width: width / view.zoom,
+      height: height / view.zoom,
     };
-    const firstLayer = this.scene.layers[0]?.id;
+    const paint = (grid: TileGrid, alpha: number) => {
+      if (!alpha) return;
+      const { size } = grid;
+      grid.forArea(area, (tile) => {
+        const terrain = this.tiles.terrain(tile);
+        const x = tile.x * size,
+          y = tile.y * size;
+        const base = {
+          width: size,
+          height: size,
+          alpha,
+          matrix: multiply(cameraMatrix, translation(x, y)),
+        };
+        const mask = terrain ? grid.mask(tile) : 0;
+        if (terrain?.atlas) {
+          draws.push({
+            ...base,
+            kind: "sprite",
+            assetId: terrain.atlas.assetId,
+            frame: autotileFrame(terrain.atlas, mask),
+          });
+          return;
+        }
+        draws.push({
+          ...base,
+          kind: "rect",
+          color: terrain?.color ?? tile.color,
+        });
+        if (!terrain || alpha < 1) return;
+        const border = Math.max(1, Math.floor(size / 8));
+        const edge = (dx: number, dy: number, w: number, h: number) =>
+          draws.push({
+            kind: "rect",
+            alpha,
+            color: terrain.edge,
+            width: w,
+            height: h,
+            matrix: multiply(cameraMatrix, translation(x + dx, y + dy)),
+          });
+        if (!(mask & NORTH)) edge(0, 0, size, border);
+        if (!(mask & EAST))
+          edge(size - border, border, border, size - 2 * border);
+        if (!(mask & SOUTH)) edge(0, size - border, size, border);
+        if (!(mask & WEST)) edge(0, border, border, size - 2 * border);
+      });
+    };
+    let layerIndex = 0;
+    const paintLayers = (through: number) => {
+      for (; layerIndex <= through; layerIndex++) {
+        if (layerIndex === 1) paint(this.tiles.legacy, 1);
+        const layer = this.scene.layers[layerIndex];
+        if (!layer?.visible) continue;
+        for (const { definition, grid } of this.tiles.layers) {
+          if (definition.visible && definition.layerId === layer.id)
+            paint(grid, definition.opacity);
+        }
+      }
+    };
     for (const state of this.entities) {
       const { entity } = state;
-      if (!tilesDrawn && entity.layerId !== firstLayer) pushTiles();
+      paintLayers(this.layerOrder.get(entity.layerId)!);
       const world = transforms.get(entity.id)!;
       const visual = entity.visual;
       if (!visual || !world.visible || !world.alpha) continue;
@@ -567,9 +683,46 @@ export class Game {
         draws.push({ ...base, ...visual, frame: frame ?? visual.frame });
       } else draws.push({ ...base, ...visual });
     }
-    if (!tilesDrawn) pushTiles();
+    paintLayers(Math.max(1, this.scene.layers.length - 1));
+    const config = this.scene.lighting;
+    const lighting: LightingPass | undefined = config?.enabled
+      ? { ambient: config.ambient, worldDraws: draws.length, lights: [] }
+      : undefined;
+    if (lighting) {
+      for (const { entity } of this.lights) {
+        const light = entity.light!;
+        const transform = transforms.get(entity.id);
+        if (!light.enabled || !light.intensity || !transform?.visible) continue;
+        const { x, y } = transformPoint(
+          cameraMatrix,
+          transform.matrix.x,
+          transform.matrix.y,
+        );
+        const radius = light.radius * view.zoom;
+        if (
+          x + radius < 0 ||
+          y + radius < 0 ||
+          x - radius > width ||
+          y - radius > height
+        )
+          continue;
+        lighting.lights.push({
+          x,
+          y,
+          radius,
+          color: light.color,
+          intensity: light.intensity,
+        });
+      }
+    }
     draws.push(...hud);
-    return { width, height, background: this.scene.background, draws };
+    return {
+      width,
+      height,
+      background: this.scene.background,
+      draws,
+      ...(lighting ? { lighting } : {}),
+    };
   }
 }
 

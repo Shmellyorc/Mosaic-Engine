@@ -2304,6 +2304,7 @@ function EntryInspector({
                   project.signals = project.signals?.filter(
                     (event) => event.id !== signal.id,
                   );
+                  clearContactSignal(project, signal.id);
                 })
               }
             >
@@ -2332,6 +2333,19 @@ function EntryInspector({
 function editSignal(id: string, change: (signal: Signal) => void) {
   useEditor.getState().edit((project) => {
     const signal = project.signals?.find((item) => item.id === id);
-    if (signal) change(signal);
+    if (signal) {
+      change(signal);
+      if (signal.type !== "void" && signal.type !== "entity")
+        clearContactSignal(project, signal.id);
+    }
   });
+}
+
+function clearContactSignal(project: Project, id: string) {
+  for (const scene of project.scenes) {
+    for (const { body } of scene.entities) {
+      if (body?.enterSignal === id) body.enterSignal = null;
+      if (body?.exitSignal === id) body.exitSignal = null;
+    }
+  }
 }

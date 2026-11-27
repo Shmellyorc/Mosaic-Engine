@@ -11,6 +11,7 @@ import {
   Texture,
 } from "pixi.js";
 import { fitFrame, type Draw } from "@mosaic/runtime";
+import { createLightmap } from "./lightmap";
 import {
   assetImages,
   insideImage,
@@ -70,6 +71,10 @@ export async function createPixi(
   const tint = new Color();
   let maskKey = "";
   let bgKey = "";
+  let lightmap: ReturnType<typeof createLightmap> | undefined;
+  let light: Sprite | undefined;
+  let lightWidth = 0,
+    lightHeight = 0;
   function spriteTexture(draw: Extract<Draw, { kind: "sprite" }>) {
     const image = resources.images.get(draw.assetId);
     if (!image) return null;
@@ -137,6 +142,7 @@ export async function createPixi(
       }
       view.position.set(layout.x, layout.y);
       view.scale.set(layout.scale);
+      light?.removeFromParent();
       frame.draws.forEach((draw, index) => {
         let slot = slots[index];
         const kind = draw.kind === "text" ? "text" : "image";
@@ -185,10 +191,35 @@ export async function createPixi(
         for (const slot of slots.splice(frame.draws.length))
           slot.node.destroy();
       }
+      if (frame.lighting) {
+        lightmap ??= createLightmap();
+        const changed = lightmap.draw(
+          frame.width,
+          frame.height,
+          frame.lighting,
+        );
+        const { canvas } = lightmap;
+        if (
+          !light ||
+          canvas.width !== lightWidth ||
+          canvas.height !== lightHeight
+        ) {
+          light?.destroy({ texture: true, textureSource: true });
+          light = new Sprite(Texture.from(canvas, true));
+          light.blendMode = "multiply";
+          lightWidth = canvas.width;
+          lightHeight = canvas.height;
+        } else if (changed) light.texture.source.update();
+        light.width = frame.width;
+        light.height = frame.height;
+        view.addChildAt(light, frame.lighting.worldDraws + 1);
+      }
       app.render();
     },
     dispose() {
       canvas.removeEventListener("webglcontextlost", onLoss);
+      light?.removeFromParent();
+      light?.destroy({ texture: true, textureSource: true });
       app.destroy({ removeView: true }, { children: true });
       for (const frame of frames.values()) frame.destroy(false);
       for (const texture of textures.values()) texture.destroy(true);

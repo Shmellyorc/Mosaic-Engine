@@ -34,6 +34,68 @@ const frame = z.object({
   w: dimension,
   h: dimension,
 });
+const worldBounds = z.object({
+  x: position,
+  y: position,
+  width: dimension,
+  height: dimension,
+});
+const rate = z.number().min(-10000).max(10000);
+const bodySchema = z.object({
+  kind: z.enum(["static", "kinematic", "dynamic", "sensor"]),
+  width: dimension,
+  height: dimension,
+  offsetX: position,
+  offsetY: position,
+  velocityX: rate,
+  velocityY: rate,
+  gravityScale: z.number().min(-8).max(8),
+  bounce: z.number().min(0).max(1),
+  enterSignal: id.nullable(),
+  exitSignal: id.nullable(),
+});
+const agentSchema = z.object({
+  speed: z.number().min(1).max(1000),
+  x: position,
+  y: position,
+  target: id.nullable(),
+  enabled: z.boolean(),
+});
+const lightSchema = z.object({
+  radius: z.number().min(1).max(8192),
+  color,
+  intensity: z.number().min(0).max(1),
+  enabled: z.boolean(),
+});
+export type Body = z.infer<typeof bodySchema>;
+export type NavigationAgent = z.infer<typeof agentSchema>;
+export type PointLight = z.infer<typeof lightSchema>;
+export const createBody = (width = 32, height = 32): Body => ({
+  kind: "kinematic",
+  width,
+  height,
+  offsetX: 0,
+  offsetY: 0,
+  velocityX: 0,
+  velocityY: 0,
+  gravityScale: 1,
+  bounce: 0,
+  enterSignal: null,
+  exitSignal: null,
+});
+export const createAgent = (x: number, y: number): NavigationAgent => ({
+  speed: 80,
+  x,
+  y,
+  target: null,
+  enabled: true,
+});
+export const createLight = (): PointLight => ({
+  radius: 120,
+  color: "#ffd891",
+  intensity: 0.8,
+  enabled: true,
+});
 const visual = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("rect"), color }),
   z.object({ kind: z.literal("sprite"), assetId: id, frame: frame.optional() }),
@@ -64,6 +126,9 @@ export const entitySchema = z.object({
   }),
   visual: visual.nullable(),
   blueprintId: id.nullable(),
+  body: bodySchema.optional(),
+  navigation: agentSchema.optional(),
+  light: lightSchema.optional(),
   clips: z
     .array(
       z.object({
@@ -80,7 +145,38 @@ const tile = z.object({
   x: z.number().int().min(0).max(255),
   y: z.number().int().min(0).max(255),
   color,
+  terrainId: id.optional(),
+  solid: z.boolean().optional(),
+  cost: z.number().min(1).max(100).optional(),
 });
+const terrainSchema = z.object({
+  id,
+  name,
+  color,
+  edge: color,
+  solid: z.boolean(),
+  cost: z.number().min(1).max(100),
+  atlas: z
+    .object({
+      assetId: id,
+      size: dimension,
+      columns: z.number().int().min(1).max(64),
+      first: z.number().int().min(0).max(4096),
+    })
+    .optional(),
+});
+const tileLayer = z.object({
+  id,
+  name,
+  layerId: id,
+  visible: z.boolean(),
+  collision: z.boolean(),
+  navigation: z.boolean(),
+  opacity: z.number().min(0).max(1),
+  tiles: z.array(tile).max(65536),
+});
+export type Terrain = z.infer<typeof terrainSchema>;
+export type TileLayer = z.infer<typeof tileLayer>;
 const sceneSchema = z.object({
   id,
   name,
@@ -91,17 +187,30 @@ const sceneSchema = z.object({
     zoom: z.number().min(0.05).max(8),
     follow: id.nullable(),
     offsetY: position,
+    offsetX: position.optional(),
+    damping: z.number().min(0).max(60).optional(),
+    deadZone: z
+      .object({
+        width: z.number().min(0).max(8192),
+        height: z.number().min(0).max(8192),
+      })
+      .optional(),
+    bounds: worldBounds.optional(),
   }),
   layers: z
     .array(z.object({ id, name, visible: z.boolean() }))
     .min(1)
     .max(128),
   entities: z.array(entitySchema).max(20000),
+  gravity: z.object({ x: rate, y: rate }).optional(),
+  lighting: z.object({ ambient: color, enabled: z.boolean() }).optional(),
   tilemap: z.object({
     size: z.number().int().min(4).max(128),
     width: z.number().int().min(1).max(256),
     height: z.number().int().min(1).max(256),
     tiles: z.array(tile).max(65536),
+    layers: z.array(tileLayer).max(32).optional(),
+    terrains: z.array(terrainSchema).max(128).optional(),
   }),
 });
 const codes = z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,31}$/)).max(16);
@@ -164,6 +273,9 @@ export function validateProject(input: unknown): Project {
   const blueprintIds = idsOf(project.blueprints, "blueprint");
   idsOf(project.input, "input");
   idsOf(project.signals ?? [], "event");
+  const signals = new Map(
+    (project.signals ?? []).map((signal) => [signal.id, signal.type]),
+  );
   if (!sceneIds.has(project.startSceneId))
     throw new Error("The starting scene is missing.");
   for (const scene of project.scenes) {
@@ -175,7 +287,28 @@ export function validateProject(input: unknown): Project {
     const checked = new Set<string>();
     if (scene.camera.follow && !entityIds.has(scene.camera.follow))
       throw new Error(`"${scene.name}" camera target is missing.`);
+    if (scene.entities.filter((entity) => entity.light).length > 128)
+      throw new Error(`"${scene.name}" exceeds the 128 light limit.`);
     for (const entity of scene.entities) {
+      if ((entity.body || entity.navigation) && entity.parentId)
+        throw new Error(
+          `"${entity.name}" must be a root entity to use physics or navigation.`,
+        );
+      if (entity.navigation?.target && !entityIds.has(entity.navigation.target))
+        throw new Error(`"${entity.name}" has a missing navigation target.`);
+      for (const signal of [
+        entity.body?.enterSignal,
+        entity.body?.exitSignal,
+      ]) {
+        if (
+          signal &&
+          signals.get(signal) !== "void" &&
+          signals.get(signal) !== "entity"
+        )
+          throw new Error(
+            `"${entity.name}" has an invalid contact event. Choose a scene event with an entity or no payload.`,
+          );
+      }
       if (!layerIds.has(entity.layerId))
         throw new Error(`"${entity.name}" has no valid layer.`);
       if (entity.blueprintId && !blueprintIds.has(entity.blueprintId))
@@ -204,15 +337,40 @@ export function validateProject(input: unknown): Project {
       }
       for (const visited of path) checked.add(visited);
     }
-    const cells = new Set<number>();
-    const { width, height, tiles } = scene.tilemap;
-    for (const cell of tiles) {
-      if (cell.x >= width || cell.y >= height)
-        throw new Error(`"${scene.name}" contains a tile outside the map.`);
-      const index = cell.y * width + cell.x;
-      if (cells.has(index))
-        throw new Error(`"${scene.name}" contains duplicate tiles.`);
-      cells.add(index);
+    const { width, height, tiles, terrains, layers } = scene.tilemap;
+    const terrainIds = idsOf(terrains ?? [], "terrain");
+    idsOf(layers ?? [], "tile layer");
+    for (const terrain of terrains ?? []) {
+      if (terrain.atlas && !assetIds.has(terrain.atlas.assetId))
+        throw new Error(
+          `Terrain "${terrain.name}" references a missing atlas.`,
+        );
+    }
+    for (const layer of layers ?? []) {
+      if (!layerIds.has(layer.layerId))
+        throw new Error(
+          `Tile layer "${layer.name}" references a missing render layer.`,
+        );
+    }
+    for (const cells of [
+      tiles,
+      ...(layers ?? []).map((layer) => layer.tiles),
+    ]) {
+      const occupied = new Set<number>();
+      for (const cell of cells) {
+        if (cell.x >= width || cell.y >= height)
+          throw new Error(`"${scene.name}" contains a tile outside the map.`);
+        if (cell.terrainId && !terrainIds.has(cell.terrainId))
+          throw new Error(
+            `"${scene.name}" contains a tile with a missing terrain.`,
+          );
+        const index = cell.y * width + cell.x;
+        if (occupied.has(index))
+          throw new Error(
+            `"${scene.name}" contains duplicate tiles on a layer.`,
+          );
+        occupied.add(index);
+      }
     }
   }
   return project;

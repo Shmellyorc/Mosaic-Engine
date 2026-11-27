@@ -12,7 +12,7 @@ const sample = await build({
   absWorkingDir: root,
   stdin: {
     contents:
-      'export { exampleProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
+      'export { exampleProject, workshopProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
     resolveDir: root,
   },
   format: "esm",
@@ -22,7 +22,7 @@ const sample = await build({
   write: false,
   plugins: [pngInline],
 });
-const { exampleProject, gameHtml } = await import(
+const { exampleProject, workshopProject, gameHtml } = await import(
   `data:text/javascript;base64,${Buffer.from(sample.outputFiles[0].contents).toString("base64")}`
 );
 await Promise.all([
@@ -45,6 +45,10 @@ await Promise.all([
   writeFile(
     resolve(dist, "lantern-ridge.html"),
     gameHtml(exampleProject(), bundle),
+  ),
+  writeFile(
+    resolve(dist, "ridge-workshop.html"),
+    gameHtml(workshopProject(), bundle),
   ),
   copyFile(resolve(root, "LICENSE"), resolve(desktop, "LICENSE")),
   writeFile(

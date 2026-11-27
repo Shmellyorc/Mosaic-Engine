@@ -1,5 +1,6 @@
 import type { Asset, Frame } from "@mosaic/model";
 import { fitFrame, type RenderFrame } from "@mosaic/runtime";
+import { createLightmap } from "./lightmap";
 
 export type Backend = "canvas" | "pixi";
 export type Preference = Backend | "auto";
@@ -79,6 +80,7 @@ export function createCanvas(options: RendererOptions): Renderer {
   options.parent.replaceChildren(canvas);
   const resources = assetImages(options.assets, options.report);
   const badFrame = reportFrames(options.report);
+  let lightmap: ReturnType<typeof createLightmap> | undefined;
   return {
     backend: "canvas",
     resize(width, height) {
@@ -104,7 +106,22 @@ export function createCanvas(options: RendererOptions): Renderer {
       ctx.fillStyle = frame.background;
       ctx.fillRect(0, 0, frame.width, frame.height);
       ctx.imageSmoothingEnabled = false;
-      for (const draw of frame.draws) {
+      const light = frame.lighting;
+      const composite = () => {
+        if (!light) return;
+        lightmap ??= createLightmap();
+        lightmap.draw(frame.width, frame.height, light);
+        ctx.save();
+        ctx.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "multiply";
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(lightmap.canvas, 0, 0, frame.width, frame.height);
+        ctx.restore();
+      };
+      for (let i = 0; i < frame.draws.length; i++) {
+        if (i === light?.worldDraws) composite();
+        const draw = frame.draws[i];
         const { a, b, c, d, x, y } = draw.matrix;
         ctx.setTransform(
           a * view.scale,
@@ -137,6 +154,7 @@ export function createCanvas(options: RendererOptions): Renderer {
           ctx.fillRect(0, 0, draw.width, draw.height);
         }
       }
+      if (light?.worldDraws === frame.draws.length) composite();
       ctx.restore();
     },
     dispose() {

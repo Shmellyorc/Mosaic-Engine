@@ -17,6 +17,10 @@ export const workspaces = [
   "Scene",
   "Blueprints",
   "Tilemap",
+  "Physics",
+  "Cameras",
+  "Navigation",
+  "Lighting",
   "Animator",
   "UI",
   "Input",
@@ -67,6 +71,9 @@ type EditorState = {
   sceneId: string;
   entityId: string | null;
   blueprintId: string | null;
+  selectedAssetId: string | null;
+  activeTileLayer: string | null;
+  activeTerrain: string | null;
   workspace: Workspace;
   selectedTile: string | null;
   eventId: string | null;
@@ -97,6 +104,9 @@ export const useEditor = create<EditorState>((set) => ({
   sceneId: project.startSceneId,
   entityId: "player",
   blueprintId: "movement",
+  selectedAssetId: null,
+  activeTileLayer: null,
+  activeTerrain: null,
   eventId: "update-event",
   selectedTile: null,
   workspace: "Blueprints",
@@ -170,6 +180,9 @@ export const useEditor = create<EditorState>((set) => ({
           .find((scene) => scene.id === next.startSceneId)
           ?.entities.find((entity) => entity.blueprintId)?.id ?? null,
       blueprintId: next.blueprints[0]?.id ?? null,
+      selectedAssetId: null,
+      activeTileLayer: null,
+      activeTerrain: null,
       breakpoints: readBreakpoints(next.id),
       eventId: null,
       selectedTile: null,
