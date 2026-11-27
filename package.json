@@ -14,6 +14,8 @@
     "desktop": "npm run build && electron dist/desktop",
     "build": "node scripts/build.mjs",
     "package": "npm run build && node scripts/package.mjs",
+    "release:archive": "node scripts/archive.mjs",
+    "release:package": "npm run package && npm run release:archive",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",

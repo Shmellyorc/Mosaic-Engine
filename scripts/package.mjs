@@ -10,6 +10,7 @@ const paths = await packager({
   out: resolve(root, "dist/packages"),
   electronVersion: version,
   executableName: "mosaic-engine",
+  appBundleId: "com.mosaicengine.editor",
   name: "Mosaic Engine",
   asar: true,
   overwrite: true,

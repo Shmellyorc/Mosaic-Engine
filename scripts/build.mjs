@@ -1,9 +1,12 @@
 import { build as vite } from "vite";
 import { build } from "esbuild";
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { buildGame, pngInline, root } from "./bundles.mjs";
 
+const { version } = JSON.parse(
+  await readFile(resolve(root, "package.json"), "utf8"),
+);
 const dist = resolve(root, "dist");
 const desktop = resolve(dist, "desktop");
 await mkdir(desktop, { recursive: true });
@@ -75,7 +78,7 @@ await Promise.all([
     JSON.stringify({
       name: "mosaic-engine",
       productName: "Mosaic Engine",
-      version: "0.1.0",
+      version,
       main: "main.cjs",
       license: "MIT",
     }),

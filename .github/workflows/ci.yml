@@ -26,12 +26,14 @@ jobs:
       - run: npm run package
       - name: Test browser and packaged desktop
         run: xvfb-run --auto-servernum npm run smoke
-      - name: Archive desktop app
-        run: tar -czf dist/mosaic-engine-linux-x64.tar.gz -C dist/packages "Mosaic Engine-linux-x64"
+      - run: npm run release:archive
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mosaic-engine-linux-x64
-          path: dist/mosaic-engine-linux-x64.tar.gz
+          path: |
+            dist/mosaic-engine-linux-x64.tar.gz
+            dist/mosaic-engine-linux-x64.tar.gz.sha256
+            dist/release-linux-x64.json
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -62,5 +64,43 @@ jobs:
         if: failure()
         with:
           name: smoke-test-results
+          path: test-results/
+          if-no-files-found: ignore
+
+  native:
+    name: Packaged desktop (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: win32-x64
+          - runner: macos-15
+            target: darwin-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium
+      - run: npm run package
+      - run: npm run smoke -- tests/desktop.spec.ts
+      - run: npm run release:archive
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mosaic-engine-${{ matrix.target }}
+          path: |
+            dist/mosaic-engine-${{ matrix.target }}.tar.gz
+            dist/mosaic-engine-${{ matrix.target }}.tar.gz.sha256
+            dist/release-${{ matrix.target }}.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: native-test-results-${{ matrix.target }}
           path: test-results/
           if-no-files-found: ignore
