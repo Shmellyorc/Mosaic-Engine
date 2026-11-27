@@ -282,35 +282,6 @@ button.export-button {
   border-color: #75539b;
   color: #e9d3ff;
 }
-.workspace-tabs {
-  border-bottom: 1px solid #313245;
-  display: flex;
-  align-items: center;
-  padding: 4px 9px 0;
-  gap: 5px;
-  background: #11131e;
-  z-index: 3;
-}
-.workspace-tabs > button {
-  color: #c6c2d5;
-  padding: 0 15px;
-  min-height: 36px;
-  border-radius: 7px 7px 0 0;
-  border: 1px solid #25283a;
-  background: #171926;
-}
-.workspace-tabs > button svg {
-  color: #aa91d1;
-}
-.workspace-tabs > button[aria-current] {
-  background: linear-gradient(180deg, #382853, #29213f);
-  border-color: #624887;
-  box-shadow: inset 0 -2px #b372fb;
-  color: #f7edff;
-}
-.workspace-tabs > button[aria-current] svg {
-  color: #d2a5ff;
-}
 .history-actions {
   margin-right: 4px;
   gap: 4px;
@@ -586,32 +557,6 @@ button.tree-row {
   padding: 5px 10px;
   background: #191b2a;
   border-bottom: 1px solid var(--edge);
-}
-.asset-grid {
-  margin-top: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
-  gap: 5px;
-}
-.asset-grid button {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  min-width: 0;
-  gap: 6px;
-  padding: 5px;
-  overflow: hidden;
-}
-.asset-grid img {
-  width: 100%;
-  height: 45px;
-  object-fit: contain;
-  image-rendering: pixelated;
-}
-.asset-grid span {
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .library-panel > input {
   width: 100%;
@@ -1320,9 +1265,6 @@ button.tree-row {
   .topbar {
     gap: 7px;
   }
-  .workspace-tabs > button {
-    padding-inline: 9px;
-  }
   .expression-row {
     gap: 4px;
   }
@@ -1435,13 +1377,6 @@ button.tree-row {
   flex: 1;
 }
 
-.workspace-tabs {
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.workspace-tabs > button {
-  flex: 0 0 auto;
-}
 .asset-details {
   display: grid;
   gap: 6px;
@@ -1467,9 +1402,6 @@ button.tree-row {
   max-width: 100%;
 }
 @media (max-width: 1200px) {
-  .workspace-tabs > button {
-    padding-inline: 8px;
-  }
 }
 
 .effect-workspace {
@@ -1983,4 +1915,123 @@ button.tree-row {
 
 .component-choice {
   padding-block: 2px;
+}
+
+.document-strip {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  min-height: 39px;
+  gap: 6px;
+  padding: 4px 9px 0;
+  border-bottom: 1px solid #313245;
+  background: #11131e;
+}
+
+.document-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 5px;
+  overflow: auto hidden;
+  scrollbar-width: thin;
+}
+
+.document-tab {
+  display: flex;
+  flex: 0 0 auto;
+  border: 1px solid #313245;
+  border-radius: 7px 7px 0 0;
+  overflow: hidden;
+  background: #171926;
+}
+
+.document-tab button {
+  min-height: 32px;
+  background: none;
+  border: 0;
+}
+
+.document-tab button[role="tab"] {
+  max-width: 225px;
+  padding-inline: 10px 8px;
+}
+
+.document-tab button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-tab[data-active="true"] {
+  color: #f7edff;
+  border-color: #624887;
+  background: linear-gradient(180deg, #392c52, #26213c);
+  box-shadow: inset 0 -2px #b372fb;
+}
+
+.context-editor {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  background: #161724;
+}
+
+.context-tools {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #181a29;
+}
+
+.context-tools header {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #303247;
+  padding-inline: 6px 4px;
+}
+
+.context-tools header button {
+  min-height: 24px;
+  padding: 3px;
+  margin-inline-start: auto;
+}
+
+.context-tool-body,
+.context-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.context-tool-body {
+  flex: 1;
+}
+
+.context-divider {
+  width: 5px;
+  min-height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  background: #222337;
+}
+
+.context-divider:hover,
+.context-divider:focus-visible {
+  outline: none;
+  background: #a874ef;
+}
+
+.editor-commands {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(100px, 1fr));
+}
+
+.sound-document .mixer-buses,
+.sound-document .effect-subtitle:has(+ .mixer-buses) {
+  display: none;
 }

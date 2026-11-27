@@ -36,10 +36,10 @@ const available = (timeline: Timeline, entityId: string, current?: string) =>
   );
 const quantize = (seconds: number) => Math.round(seconds * 1000) / 1000;
 
-export function TimelineWorkspace() {
+export function TimelineWorkspace({ initialId }: { initialId?: string } = {}) {
   const scene = useEditor(selectedScene);
   const selected = useEditor(selectedEntity);
-  const [timelineId, setTimelineId] = useState("");
+  const [timelineId, setTimelineId] = useState(initialId ?? "");
   const timelines = scene.timelines ?? [];
   const timeline =
     timelines.find(({ id }) => id === timelineId) ?? timelines[0];

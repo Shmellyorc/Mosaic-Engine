@@ -1,3 +1,4 @@
+import { openEditor } from "./editor-navigation";
 import { _electron, chromium, expect, test } from "@playwright/test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -90,12 +91,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await page
       .getByRole("button", { name: "Create Project", exact: true })
       .click();
-    const workspaces = page.getByRole("navigation", {
-      name: "Engine workspaces",
-    });
-    await workspaces
-      .getByRole("button", { name: "Audio", exact: true })
-      .click();
+    await openEditor(page, "Audio");
     await page.getByRole("button", { name: "Import WAV" }).click();
     await expect(page.getByLabel("Sound name")).toHaveValue("native-tone.wav");
     await page.getByRole("button", { name: "Audition", exact: true }).click();
@@ -106,7 +102,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
           .evaluate((meter: HTMLMeterElement) => meter.value),
       )
       .toBeGreaterThan(0.02);
-    await workspaces.getByRole("button", { name: "Data", exact: true }).click();
+    await openEditor(page, "Data");
     const dataTools = page.getByRole("navigation", { name: "Data tools" });
     await dataTools
       .getByRole("button", { name: "Globals", exact: true })
@@ -115,7 +111,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await page.getByLabel("Global name", { exact: true }).fill("Native Score");
     await page.getByLabel("Global name", { exact: true }).press("Enter");
     await page.getByLabel("Save global", { exact: true }).check();
-    await workspaces.getByRole("button", { name: "UI", exact: true }).click();
+    await openEditor(page, "UI");
     const palette = page.locator(".ui-add-menu");
     await palette.locator("summary").click();
     await palette
@@ -123,9 +119,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       .click();
     await page.getByLabel("Widget text", { exact: true }).fill("Native Action");
     await page.getByLabel("Widget text", { exact: true }).press("Enter");
-    await workspaces
-      .getByRole("button", { name: "Scene", exact: true })
-      .click();
+    await openEditor(page, "Scene");
     await fileAction("Import Image");
     await page.getByRole("tab", { name: "Project", exact: true }).click();
     await expect(
@@ -136,7 +130,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await page.getByRole("button", { name: "Sprite", exact: true }).click();
     await page.getByLabel("Entity name").fill("Lantern");
     await page.getByLabel("Entity name").press("Enter");
-    await page.getByRole("button", { name: "Blueprints", exact: true }).click();
+    await openEditor(page, "Blueprints");
     await page
       .getByRole("button", { name: "New Blueprint", exact: true })
       .click();
@@ -152,7 +146,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       .click();
     await nested.getByLabel("Velocity X value").fill("45");
     await nested.getByLabel("Velocity X value").press("Enter");
-    await page.getByRole("button", { name: "Scene", exact: true }).click();
+    await openEditor(page, "Scene");
     await page.getByLabel("Entity blueprint").selectOption({ label: "Walk" });
     await page.getByLabel("Renderer preference").selectOption("canvas");
     await expect(page.getByTestId("scene-backend")).toHaveText("Canvas 2D");
@@ -202,7 +196,7 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       page.getByText("Project opened.", { exact: true }),
     ).toBeVisible();
     await expect(page.getByLabel("Entity name")).toHaveValue("Lantern");
-    await workspaces.getByRole("button", { name: "Data", exact: true }).click();
+    await openEditor(page, "Data");
     await dataTools
       .getByRole("button", { name: "Globals", exact: true })
       .click();

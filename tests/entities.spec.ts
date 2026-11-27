@@ -1,3 +1,4 @@
+import { openEditor } from "./editor-navigation";
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -72,12 +73,11 @@ test("authors a prefab tree and Blueprint attachment override through the projec
   await expect(
     page.getByText("Project opened.", { exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("navigation", { name: "Engine workspaces" })
-    .getByRole("button", { name: "Scene", exact: true })
-    .click();
-  await page.getByRole("tab", { name: "Hierarchy", exact: true }).click();
-  const tree = page.getByRole("tabpanel", { name: "Hierarchy" });
+  await openEditor(page, "Scene");
+  const tree = page.getByRole("complementary", {
+    name: "Hierarchy",
+    exact: true,
+  });
   await tree
     .getByRole("button", { name: "Marker", exact: true })
     .dragTo(tree.getByRole("button", { name: "Crate Rig", exact: true }));
@@ -132,4 +132,90 @@ test("authors a prefab tree and Blueprint attachment override through the projec
   );
   await expect(game.locator("#runtime-error")).toHaveText("");
   await game.close();
+});
+
+test("opens filename tabs from one browser and restores local editor tools", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("mosaic-renderer", "canvas"),
+  );
+  await page.goto("http://127.0.0.1:5188/");
+  const tabs = page.getByRole("tablist", { name: "Open documents" });
+  const project = page.getByRole("tabpanel", { name: "Project" });
+  const blueprint = tabs.getByRole("tab", {
+    name: "Player Movement.blueprint",
+  });
+  await expect(blueprint).toHaveAttribute("aria-selected", "true");
+  const library = page.getByRole("complementary", { name: "Block Library" });
+  await expect(library).toBeVisible();
+  const divider = page.getByRole("separator", { name: "Resize Block Library" });
+  const oldWidth = Number(await divider.getAttribute("aria-valuenow"));
+  await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", String(oldWidth + 12));
+  await page.getByRole("button", { name: "Collapse Block Library" }).click();
+  await expect(library.getByLabel("Search blocks")).toHaveCount(0);
+
+  await project
+    .getByRole("button", { name: "Ridge panorama", exact: true })
+    .click();
+  const image = tabs.getByRole("tab", { name: "Ridge panorama.png" });
+  await expect(image).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page
+      .getByRole("region", { name: "Asset preview" })
+      .getByRole("img", { name: "Ridge panorama" }),
+  ).toBeVisible();
+  await expect(library).toHaveCount(0);
+  await project
+    .getByRole("button", { name: "Ridge Workshop", exact: true })
+    .click();
+  await expect(
+    tabs.getByRole("tab", { name: "Ridge Workshop.scene" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("complementary", { name: "Hierarchy", exact: true }),
+  ).toBeVisible();
+  await blueprint.click();
+  await expect(
+    page.getByRole("button", { name: "Expand Block Library" }),
+  ).toBeVisible();
+
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          new Promise<number>((resolve) => {
+            const open = indexedDB.open("mosaic-editor", 1);
+            open.onsuccess = () => {
+              const request = open.result
+                .transaction("workspace")
+                .objectStore("workspace")
+                .get("autosave");
+              request.onsuccess = () => {
+                const snapshot = request.result;
+                resolve(
+                  snapshot?.workspace === "Blueprints"
+                    ? (snapshot.documents?.length ?? 0)
+                    : 0,
+                );
+                open.result.close();
+              };
+            };
+          }),
+      ),
+    )
+    .toBe(3);
+  await page.reload();
+  await expect(blueprint).toHaveAttribute("aria-selected", "true");
+  await expect(image).toBeVisible();
+  await page.getByRole("button", { name: "Expand Block Library" }).click();
+  await expect(divider).toHaveAttribute("aria-valuenow", String(oldWidth + 12));
+  await tabs.getByRole("button", { name: "Close Ridge panorama.png" }).click();
+  await expect(image).toHaveCount(0);
+  await openEditor(page, "Audio");
+  await expect(
+    page.getByRole("tabpanel", { name: "Audio Mixer" }),
+  ).toBeVisible();
+  await expect(blueprint).toHaveAttribute("aria-selected", "true");
 });

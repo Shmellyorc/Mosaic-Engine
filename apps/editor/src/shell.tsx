@@ -16,17 +16,10 @@ import {
 import {
   Activity,
   AudioLines,
-  Database,
   Box,
-  Clock3,
-  Sparkles,
-  Braces,
   Bug,
-  Code2,
   Download,
-  Film,
   FolderOpen,
-  Gamepad2,
   Image,
   Layers3,
   LayoutPanelLeft,
@@ -54,7 +47,6 @@ import {
   HierarchyPanel,
   InspectorPanel,
   ProjectPanel,
-  SceneSettings,
   addEntity,
 } from "./panels";
 import { AnimatorWorkspace, InputWorkspace } from "./systems";
@@ -68,7 +60,8 @@ import { UiDesigner, UiHierarchy } from "./ui-designer";
 import { UiInspector } from "./ui-inspector";
 import { selectedWidget } from "./ui-author";
 import { GamePreview, SceneViewport } from "./viewport";
-import { worldTools } from "./world";
+import { documentInfo, editors } from "./documents";
+import { DocumentTabs, LocalTools, PrefabDocument } from "./document-view";
 import {
   exportGame,
   importImage,
@@ -78,25 +71,14 @@ import {
   saveProject,
 } from "./files";
 import {
+  activeDocument,
   chooseEntity,
+  openDocument,
+  openEditor,
   selectedScene,
   useEditor,
-  workspaces,
-  type Workspace,
 } from "./state";
 
-const icons = {
-  Scene: Layers3,
-  Blueprints: Braces,
-  ...worldTools,
-  Animator: Film,
-  Timeline: Clock3,
-  Particles: Sparkles,
-  Audio: AudioLines,
-  Data: Database,
-  UI: Monitor,
-  Input: Gamepad2,
-};
 const activeLayoutKey = "mosaic-layout-v1";
 const namedLayoutKey = "mosaic-named-layouts-v1";
 let busy = false;
@@ -136,21 +118,54 @@ function loadExample(create = exampleProject) {
   if (!discard()) return;
   resetProjectHandle();
   useEditor.getState().load(create());
-  useEditor.setState(
-    create === exampleProject
-      ? { workspace: "Blueprints", eventId: "update-event" }
-      : { workspace: "Scene" },
-  );
+  if (create === exampleProject) {
+    openDocument({ kind: "blueprint", id: "movement" });
+    useEditor.setState({ eventId: "update-event" });
+  }
 }
 function Assets() {
   return <AssetPanel onImport={image} />;
 }
 function WorkspacePanel() {
   const workspace = useEditor((state) => state.workspace);
-  return (
-    <>
-      {workspace === "Blueprints" && <BlueprintWorkspace />}
-      {workspace === "Scene" && (
+  const ref = useEditor(activeDocument);
+  const project = useEditor((state) => state.project);
+  if (!ref || !documentInfo(project, ref))
+    return <div className="panel-body muted">Open a file from Project.</div>;
+  if (ref.kind === "image") return <Assets />;
+  if (ref.kind === "prefab") return <PrefabDocument key={ref.id} />;
+  if (ref.kind === "sound")
+    return <AudioWorkspace key={ref.id} soundId={ref.id} />;
+  if (workspace === "Blueprints")
+    return (
+      <LocalTools
+        key="blueprint-library"
+        title="Block Library"
+        storageKey="blueprint-library"
+        tool={<LibraryPanel />}
+      >
+        <BlueprintWorkspace />
+      </LocalTools>
+    );
+  if (workspace === "UI")
+    return (
+      <LocalTools
+        key="ui-hierarchy"
+        title="UI Hierarchy"
+        storageKey="ui-hierarchy"
+        tool={<UiHierarchy />}
+      >
+        <UiDesigner />
+      </LocalTools>
+    );
+  if (workspace === "Scene")
+    return (
+      <LocalTools
+        key="scene-hierarchy"
+        title="Hierarchy"
+        storageKey="scene-hierarchy"
+        tool={<HierarchyPanel />}
+      >
         <div className="workspace scene-wrap">
           <div className="context-actions">
             <button onClick={() => addEntity()}>
@@ -165,30 +180,38 @@ function WorkspacePanel() {
           </div>
           <SceneViewport />
         </div>
-      )}
-      {workspace === "Tilemap" && <SceneViewport worldTool="Tilemap" />}
-      {workspace === "Physics" && <SceneViewport worldTool="Physics" />}
-      {workspace === "Cameras" && <SceneViewport worldTool="Cameras" />}
-      {workspace === "Navigation" && <SceneViewport worldTool="Navigation" />}
-      {workspace === "Lighting" && <SceneViewport worldTool="Lighting" />}
-      {workspace === "Animator" && <AnimatorWorkspace />}
-      {workspace === "Timeline" && <TimelineWorkspace />}
-      {workspace === "Particles" && <ParticlesWorkspace />}
-      {workspace === "Audio" && <AudioWorkspace />}
-      {workspace === "Data" && <DataWorkspace />}
-      {workspace === "UI" && <UiDesigner />}
-      {workspace === "Input" && <InputWorkspace />}
-    </>
-  );
+      </LocalTools>
+    );
+  if (
+    workspace === "Tilemap" ||
+    workspace === "Physics" ||
+    workspace === "Cameras" ||
+    workspace === "Navigation" ||
+    workspace === "Lighting"
+  )
+    return (
+      <LocalTools
+        key="scene-hierarchy"
+        title="Hierarchy"
+        storageKey="scene-hierarchy"
+        tool={<HierarchyPanel />}
+      >
+        <SceneViewport worldTool={workspace} />
+      </LocalTools>
+    );
+  if (workspace === "Animator") return <AnimatorWorkspace />;
+  if (workspace === "Timeline")
+    return <TimelineWorkspace key={ref.id} initialId={ref.id} />;
+  if (workspace === "Particles") return <ParticlesWorkspace />;
+  if (workspace === "Data") return <DataWorkspace />;
+  if (workspace === "Input") return <InputWorkspace />;
+  return null;
 }
 
-function DockedHierarchy() {
-  return useEditor((state) => state.workspace) === "UI" ? (
-    <UiHierarchy />
-  ) : (
-    <HierarchyPanel />
-  );
+function AudioMixerPanel() {
+  return <AudioWorkspace />;
 }
+
 function DockedInspector() {
   const workspace = useEditor((state) => state.workspace);
   const widget = useEditor(selectedWidget);
@@ -219,27 +242,6 @@ const registry: Record<
     width: 165,
     height: 110,
   },
-  hierarchy: {
-    title: "Hierarchy",
-    component: DockedHierarchy,
-    icon: Layers3,
-    width: 165,
-    height: 100,
-  },
-  assets: {
-    title: "Assets",
-    component: Assets,
-    icon: Image,
-    width: 155,
-    height: 100,
-  },
-  library: {
-    title: "Block Library",
-    component: LibraryPanel,
-    icon: Code2,
-    width: 150,
-    height: 100,
-  },
   inspector: {
     title: "Inspector",
     component: DockedInspector,
@@ -247,12 +249,12 @@ const registry: Record<
     width: 212,
     height: 120,
   },
-  settings: {
-    title: "Scene Settings",
-    component: SceneSettings,
-    icon: Layers3,
-    width: 205,
-    height: 120,
+  audio: {
+    title: "Audio Mixer",
+    component: AudioMixerPanel,
+    icon: AudioLines,
+    width: 280,
+    height: 150,
   },
   preview: {
     title: "Game Preview",
@@ -290,9 +292,13 @@ const registry: Record<
     height: 95,
   },
 };
-const components = Object.fromEntries(
-  Object.entries(registry).map(([id, panel]) => [id, panel.component]),
-);
+const integratedPanels = ["hierarchy", "assets", "library", "settings"];
+const components = {
+  ...Object.fromEntries(
+    Object.entries(registry).map(([id, panel]) => [id, panel.component]),
+  ),
+  ...Object.fromEntries(integratedPanels.map((id) => [id, () => null])),
+};
 function DockTab({ api }: IDockviewPanelHeaderProps) {
   const Icon = registry[api.id]?.icon ?? Box;
   return (
@@ -348,21 +354,12 @@ function reset(api: DockviewApi) {
     { referencePanel: "workspace", direction: "left" },
     { initialWidth: 235 },
   );
-  addPanel(api, "hierarchy", { referencePanel: "project" }, undefined, true);
-  addPanel(api, "assets", { referencePanel: "project" }, undefined, true);
-  addPanel(
-    api,
-    "library",
-    { referencePanel: "project", direction: "below" },
-    { initialHeight: 255 },
-  );
   addPanel(
     api,
     "inspector",
     { referencePanel: "workspace", direction: "right" },
     { initialWidth: 292 },
   );
-  addPanel(api, "settings", { referencePanel: "inspector" }, undefined, true);
   addPanel(
     api,
     "preview",
@@ -381,6 +378,7 @@ function reset(api: DockviewApi) {
 }
 function restore(api: DockviewApi, value: SerializedDockview) {
   api.fromJSON(value);
+  for (const id of integratedPanels) api.getPanel(id)?.api.close();
   lockWorkspace(api);
 }
 function namedLayouts() {
@@ -430,7 +428,6 @@ function Menu({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function App() {
-  const workspace = useEditor((state) => state.workspace);
   const scene = useEditor(selectedScene);
   const projectName = useEditor((state) => state.project.name);
   const dirt = useEditor((state) => state.project !== state.saved);
@@ -446,9 +443,6 @@ export function App() {
   const [layoutName, setLayoutName] = useState("");
   const [projectTitle, setProjectTitle] = useState("");
   const modal = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (workspace === "UI") api?.getPanel("hierarchy")?.api.setActive();
-  }, [api, workspace]);
   function newProject() {
     if (!discard()) return;
     setProjectTitle("");
@@ -476,20 +470,6 @@ export function App() {
     };
     const listener = api.onDidLayoutChange(save);
     return () => listener.dispose();
-  }, [api]);
-  useEffect(() => {
-    if (!api) return;
-    const show = () => {
-      const assets =
-        api.getPanel("assets") ??
-        addPanel(api, "assets", {
-          referencePanel: api.getPanel("project") ? "project" : "workspace",
-          direction: api.getPanel("project") ? "within" : "left",
-        });
-      assets.api.setActive();
-    };
-    window.addEventListener("mosaic:show-assets", show);
-    return () => window.removeEventListener("mosaic:show-assets", show);
   }, [api]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -522,8 +502,14 @@ export function App() {
       existing.api.close();
       return;
     }
-    const left = ["project", "hierarchy", "assets", "library"].includes(id);
-    const bottom = ["preview", "console", "debug", "profiler"].includes(id);
+    const left = id === "project";
+    const bottom = [
+      "preview",
+      "console",
+      "debug",
+      "profiler",
+      "audio",
+    ].includes(id);
     addPanel(
       api,
       id,
@@ -593,6 +579,25 @@ export function App() {
             >
               Redo<kbd>Ctrl+Y</kbd>
             </button>
+          </Menu>
+          <Menu label="Editors">
+            <nav className="editor-commands" aria-label="Engine editors">
+              {editors.map((name) => (
+                <button
+                  key={name}
+                  data-menu-close
+                  onClick={() => {
+                    if (name === "Audio") {
+                      const panel = api?.getPanel("audio");
+                      if (panel) panel.api.setActive();
+                      else if (api) togglePanel("audio");
+                    } else openEditor(name);
+                  }}
+                >
+                  {name}
+                </button>
+              ))}
+            </nav>
           </Menu>
           <Menu label="Window">
             {Object.entries(registry)
@@ -722,20 +727,7 @@ export function App() {
           </button>
         </div>
       </header>
-      <nav className="workspace-tabs" aria-label="Engine workspaces">
-        {workspaces.map((name: Workspace) => {
-          const Icon = icons[name];
-          return (
-            <button
-              key={name}
-              aria-current={workspace === name ? "page" : undefined}
-              onClick={() => useEditor.setState({ workspace: name })}
-            >
-              <Icon size={17} />
-              {name}
-            </button>
-          );
-        })}
+      <DocumentTabs>
         <div className="push history-actions">
           <button
             aria-label="Undo"
@@ -754,7 +746,7 @@ export function App() {
             <Redo2 size={16} />
           </button>
         </div>
-      </nav>
+      </DocumentTabs>
       <div className="dock-frame">
         <DockviewReact
           className="dockview-theme-dark"

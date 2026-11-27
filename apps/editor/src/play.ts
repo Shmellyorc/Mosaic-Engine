@@ -1,7 +1,7 @@
 import { AudioMixer, browserSlotStorage, Game } from "@mosaic/runtime";
 import type { Project } from "@mosaic/model";
 import { profileReload, profileSimulation, resetProfile } from "./profiler";
-import { selectedScene, useEditor } from "./state";
+import { openDocument, selectedScene, useEditor } from "./state";
 
 let game: Game | undefined;
 export function playGame() {
@@ -54,9 +54,9 @@ function showPause(game: Game) {
     pause.entityId !== current.snapshot.pause?.entityId ||
     pause.attachmentId !== current.snapshot.pause?.attachmentId
   ) {
+    openDocument({ kind: "blueprint", id: pause.blueprintId });
     useEditor.setState({
       transport: "paused",
-      workspace: "Blueprints",
       entityId: pause.entityId,
       blueprintId: pause.blueprintId,
       attachmentId: pause.attachmentId,

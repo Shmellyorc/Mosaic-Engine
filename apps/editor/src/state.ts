@@ -15,23 +15,17 @@ import type { Preference } from "@mosaic/render";
 import type { BlueprintPause, RuntimeLog } from "@mosaic/runtime";
 import type { ProjectLocation } from "../../desktop/src/contracts";
 
-export const workspaces = [
-  "Scene",
-  "Blueprints",
-  "Tilemap",
-  "Physics",
-  "Cameras",
-  "Navigation",
-  "Lighting",
-  "Animator",
-  "Timeline",
-  "Particles",
-  "Audio",
-  "Data",
-  "UI",
-  "Input",
-] as const;
-export type Workspace = (typeof workspaces)[number];
+import {
+  documentInfo,
+  documentKey,
+  editors,
+  restoreDocumentRefs,
+  sceneDocument,
+  type DocumentRef,
+  type Workspace,
+} from "./documents";
+export { editors as workspaces, type Workspace } from "./documents";
+
 type Transport = "editing" | "playing" | "paused";
 type Snapshot = {
   blocks: string[];
@@ -83,6 +77,8 @@ type EditorState = {
   activeTileLayer: string | null;
   activeTerrain: string | null;
   workspace: Workspace;
+  documents: DocumentRef[];
+  activeDocument: string | null;
   selectedTile: string | null;
   eventId: string | null;
   transport: Transport;
@@ -120,6 +116,8 @@ export const useEditor = create<EditorState>((set) => ({
   eventId: "update-event",
   selectedTile: null,
   workspace: "Blueprints",
+  documents: [{ kind: "blueprint", id: "movement" }],
+  activeDocument: documentKey({ kind: "blueprint", id: "movement" }),
   transport: "editing",
   runId: 0,
   preference:
@@ -298,14 +296,105 @@ export function editBlueprint(recipe: (blueprint: Blueprint) => void) {
     }
   });
 }
-export function chooseScene(sceneId: string) {
+export function activeDocument(state: EditorState) {
+  return state.documents.find(
+    (ref) => documentKey(ref) === state.activeDocument,
+  );
+}
+
+export function openDocument(
+  ref: DocumentRef,
+  options: { workspace?: Workspace; resetSelection?: boolean } = {},
+) {
+  const state = useEditor.getState();
+  const info = documentInfo(state.project, ref);
+  if (!info) return;
+  const key = documentKey(ref);
+  const sameScene = !ref.sceneId || ref.sceneId === state.sceneId;
   useEditor.setState({
-    sceneId,
-    entityId: null,
-    widgetId: null,
-    transport: "editing",
-    workspace: "Scene",
+    documents: state.documents.some((old) => documentKey(old) === key)
+      ? state.documents
+      : [...state.documents, ref],
+    activeDocument: key,
+    workspace: options.workspace ?? info.workspace,
+    ...(ref.sceneId ? { sceneId: ref.sceneId } : {}),
+    ...(!sameScene ? { transport: "editing" as const } : {}),
+    ...(!sameScene || options.resetSelection
+      ? { entityId: null, widgetId: null }
+      : {}),
+    ...(ref.kind === "blueprint" && ref.id !== state.blueprintId
+      ? { blueprintId: ref.id, eventId: null, selectedTile: null }
+      : {}),
+    ...(ref.kind === "image" ? { selectedAssetId: ref.id } : {}),
+    ...(["entity", "animator", "particles"].includes(ref.kind)
+      ? { entityId: ref.id }
+      : {}),
+    ...(ref.kind === "tilemap" && ref.id !== ref.sceneId
+      ? { activeTileLayer: ref.id }
+      : {}),
   });
+}
+
+export function closeDocument(ref: DocumentRef) {
+  const state = useEditor.getState();
+  const key = documentKey(ref);
+  const index = state.documents.findIndex((item) => documentKey(item) === key);
+  if (index < 0) return;
+  const documents = state.documents.filter(
+    (item) => documentKey(item) !== key && documentInfo(state.project, item),
+  );
+  useEditor.setState({ documents });
+  if (state.activeDocument !== key) return;
+  const next = documents[index] ?? documents[index - 1];
+  if (next) openDocument(next);
+  else useEditor.setState({ activeDocument: null });
+}
+
+export function chooseScene(sceneId: string) {
+  openDocument(sceneDocument(sceneId), { resetSelection: true });
+}
+
+export function openEditor(workspace: Workspace) {
+  const state = useEditor.getState();
+  const scene = selectedScene(state);
+  const selected = selectedEntity(state) ?? scene.entities[0];
+  const forScene = (kind: DocumentRef["kind"], id = scene.id) =>
+    openDocument({ kind, id, sceneId: scene.id }, { workspace });
+  switch (workspace) {
+    case "Blueprints": {
+      const blueprint = selectedBlueprint(state);
+      if (blueprint) openDocument({ kind: "blueprint", id: blueprint.id });
+      else {
+        forScene("scene");
+      }
+      break;
+    }
+    case "Animator":
+      if (selected) forScene("animator", selected.id);
+      else forScene("scene");
+      break;
+    case "Particles":
+      if (selected) forScene("particles", selected.id);
+      else forScene("scene");
+      break;
+    case "Tilemap":
+      forScene("tilemap");
+      break;
+    case "Timeline":
+      forScene("timeline");
+      break;
+    case "UI":
+      forScene("ui");
+      break;
+    case "Data":
+      openDocument({ kind: "data", id: "project-data" });
+      break;
+    case "Input":
+      openDocument({ kind: "input", id: "project-input" });
+      break;
+    default:
+      forScene("scene");
+  }
 }
 export function chooseEntity(entity: Entity | undefined) {
   const blueprint = entity && attachmentBlueprints(entity)[0];
@@ -324,6 +413,8 @@ type Autosave = {
   sceneId: string;
   entityId: string | null;
   blueprintId: string | null;
+  documents?: DocumentRef[];
+  activeDocument?: string | null;
 };
 function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -354,11 +445,27 @@ export async function initAutosave() {
         useEditor.getState().load(project);
         const { workspace, sceneId, entityId, blueprintId } = restored;
         useEditor.setState({
-          workspace: workspaces.includes(workspace) ? workspace : "Scene",
+          workspace: editors.includes(workspace) ? workspace : "Scene",
           sceneId,
           entityId,
           blueprintId,
         });
+        const documents = restoreDocumentRefs(project, restored.documents);
+        if (restored.documents) {
+          const ref = documents.find(
+            (entry) => documentKey(entry) === restored.activeDocument,
+          );
+          useEditor.setState({
+            documents,
+            activeDocument: ref ? documentKey(ref) : null,
+          });
+          if (ref)
+            openDocument(ref, {
+              workspace: editors.includes(workspace) ? workspace : "Scene",
+            });
+        } else {
+          openEditor(editors.includes(workspace) ? workspace : "Scene");
+        }
       } catch (error) {
         useEditor
           .getState()
@@ -368,8 +475,15 @@ export async function initAutosave() {
     let timer: number;
     const save = () => {
       try {
-        const { project, workspace, sceneId, entityId, blueprintId } =
-          useEditor.getState();
+        const {
+          project,
+          workspace,
+          sceneId,
+          entityId,
+          blueprintId,
+          documents,
+          activeDocument,
+        } = useEditor.getState();
         const transaction = db.transaction("workspace", "readwrite");
         transaction.onabort = () =>
           useEditor
@@ -382,6 +496,8 @@ export async function initAutosave() {
             sceneId,
             entityId,
             blueprintId,
+            documents,
+            activeDocument,
           },
           "autosave",
         );
@@ -397,7 +513,9 @@ export async function initAutosave() {
         state.workspace === previous.workspace &&
         state.sceneId === previous.sceneId &&
         state.entityId === previous.entityId &&
-        state.blueprintId === previous.blueprintId
+        state.blueprintId === previous.blueprintId &&
+        state.documents === previous.documents &&
+        state.activeDocument === previous.activeDocument
       )
         return;
       window.clearTimeout(timer);

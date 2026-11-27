@@ -75,6 +75,7 @@ import {
 } from "@mosaic/model";
 import {
   editBlueprint,
+  openDocument,
   selectedBlueprint,
   selectedEntity,
   selectedScene,
@@ -486,8 +487,8 @@ function createBehaviour() {
   useEditor.getState().edit((project) => {
     project.blueprints.push(blueprint);
   });
+  openDocument({ kind: "blueprint", id: blueprint.id });
   useEditor.setState({
-    blueprintId: blueprint.id,
     eventId: blueprint.events.find((event) => event.kind === "update")?.id,
     selectedTile: null,
   });
@@ -2549,11 +2550,7 @@ export function BlueprintWorkspace() {
           aria-label="Blueprint"
           value={blueprint?.id ?? ""}
           onChange={(change) =>
-            useEditor.setState({
-              blueprintId: change.target.value,
-              eventId: null,
-              selectedTile: null,
-            })
+            openDocument({ kind: "blueprint", id: change.target.value })
           }
         >
           {!blueprint && <option value="">Choose a blueprint</option>}
@@ -2891,13 +2888,10 @@ export function revealBlock(blueprint: Blueprint | undefined, blockId: string) {
     entries(blueprint).find(
       (entry) => entry.id === blockId || findBlock(entry.blocks, blockId),
     );
-  if (entry)
-    useEditor.setState({
-      blueprintId: blueprint!.id,
-      workspace: "Blueprints",
-      eventId: entry.id,
-      selectedTile: blockId,
-    });
+  if (entry) {
+    openDocument({ kind: "blueprint", id: blueprint!.id });
+    useEditor.setState({ eventId: entry.id, selectedTile: blockId });
+  }
 }
 function showEntry(entryId: string) {
   useEditor.setState({ eventId: entryId, selectedTile: null });

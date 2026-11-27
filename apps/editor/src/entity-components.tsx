@@ -20,6 +20,8 @@ import { ValueControl } from "./blueprint-values";
 import { Field, NumberField, Section } from "./controls";
 import {
   editEntity,
+  openDocument,
+  openEditor,
   editScene,
   chooseEntity,
   selectedScene,
@@ -140,8 +142,9 @@ export function insertPrefab(id: string) {
     editScene((draft) => {
       draft.entities.push(...group);
     });
-    chooseEntity(group.find(({ parentId }) => !parentId));
-    useEditor.setState({ workspace: "Scene" });
+    const root = group.find(({ parentId }) => !parentId);
+    if (root) openDocument({ kind: "entity", id: root.id, sceneId: scene.id });
+    chooseEntity(root);
   });
 }
 
@@ -244,15 +247,13 @@ export function BlueprintAttachments({
             <div className="inline-actions">
               <button
                 disabled={!definition}
-                onClick={() =>
-                  useEditor.setState({
-                    blueprintId: attachment.blueprintId,
-                    attachmentId: attachment.id,
-                    workspace: "Blueprints",
-                    selectedTile: null,
-                    eventId: null,
-                  })
-                }
+                onClick={() => {
+                  openDocument({
+                    kind: "blueprint",
+                    id: attachment.blueprintId,
+                  });
+                  useEditor.setState({ attachmentId: attachment.id });
+                }}
               >
                 <Code2 size={14} /> Edit
               </button>
@@ -355,9 +356,7 @@ export function ComponentInspector({
                 }
               />
             </Field>
-            <button
-              onClick={() => useEditor.setState({ workspace: "Particles" })}
-            >
+            <button onClick={() => openEditor("Particles")}>
               Edit particle emitter
             </button>
             <button

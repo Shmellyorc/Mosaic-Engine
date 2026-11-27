@@ -17,11 +17,11 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 
 - **Scene** creates scenes, entities and child entities. Use the dockable Inspector or Scene Settings to adjust components, layer order, camera follow and transforms. Drag visible entities to move them, Alt-drag to pan, and scroll to zoom.
 - **Blueprints** edits typed expressions, nested branches and loops, reusable functions, and scene events. Add blocks from the stack or the Block Library, and drag a block header or press Alt+Up/Down to reorder. Validation identifies the affected block.
-- **Tilemap**, **Physics**, **Cameras**, **Navigation**, and **Lighting** provide dedicated world workspaces with editable controls and viewport previews.
+- **Tilemap**, **Physics**, **Cameras**, **Navigation**, and **Lighting** provide scene tools with editable controls and viewport previews.
 - **Animator**, **Timeline**, **Particles**, and **Audio** provide dedicated authoring and preview workspaces for gameplay effects.
 - **Data** opens tools for typed sheets, enums, structs, resources, globals, saves, and localization.
 - **UI** designs responsive game interfaces with a docked hierarchy and inspector. **Input** binds keyboard axes.
-- Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector. **Validate project assets** checks image decoding and dimensions, sprite and animation frame bounds, terrain atlases, UI references, and embedded WAV files.
+- Click an image in **Project** to open its document preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector. **Validate project assets** checks image decoding and dimensions, sprite and animation frame bounds, terrain atlases, UI references, and embedded WAV files.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
 - **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring. Authoring changes apply between simulation frames. Unchanged authored fields retain their live values, and explicitly edited fields take on the new authored values. Adding an entity with a Blueprint runs its On Start handler.
 
@@ -35,6 +35,12 @@ Use **File → Open Lantern Courier** or **File → Open Beacon Circuit**, then 
 - **Beacon Circuit** is a three-board logic puzzle. Click a beacon or navigate with the arrow keys and press Enter. Each switch flips itself and its orthogonal neighbors. Light all nine beacons to advance. Reset board restores the current pattern and keeps the running move count. The game saves the fewest moves for a full clear.
 
 The build writes `dist/lantern-courier.html` and `dist/beacon-circuit.html` for offline play, plus matching `.mosaic.json` documents for authoring. The HTML player offers both renderers and an **Enable audio** control. CI publishes the four files together in the **playable-example-games** artifact.
+
+## Open and arrange project documents
+
+The **Project** browser opens scenes, entities, Blueprints, prefabs, images, tilemaps, animators, timelines, particle systems, UI, audio clips, data and input in filename tabs. **Editors** provides shortcuts to tools for the selected scene or entity. Document tabs and the selected editor return with the browser workspace autosave.
+
+The scene and UI editors have their own hierarchies. Blueprint documents have a local Block Library. Drag the divider to resize these tools, or use the arrow keys while the divider is focused. Collapse and width preferences persist. **Window** manages shared dockable tools, including Project, Inspector, Game Preview, Audio Mixer, Debug, Console and Profiler. The Audio Mixer opens independently of the selected document.
 
 ## Build entity hierarchies and prefabs
 

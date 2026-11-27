@@ -1,3 +1,4 @@
+import { openEditor } from "./editor-navigation";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -78,7 +79,7 @@ test("browser authoring covers nested tiles, workspace tabs, undo/redo, and Inde
   await expect(added).toHaveCount(0);
   await page.getByRole("button", { name: "Redo", exact: true }).click();
   await expect(added).toBeVisible();
-  await page.getByRole("button", { name: "Scene", exact: true }).click();
+  await openEditor(page, "Scene");
   await page
     .getByRole("button", { name: "Entity", exact: true })
     .first()
@@ -88,7 +89,7 @@ test("browser authoring covers nested tiles, workspace tabs, undo/redo, and Inde
   await name.fill("Trail Marker");
   await expect(name).toHaveValue("Trail Marker");
   await name.press("Enter");
-  await page.getByRole("button", { name: "Blueprints", exact: true }).click();
+  await openEditor(page, "Blueprints");
   await expect(added).toBeVisible();
   await expect
     .poll(async () =>
@@ -117,7 +118,7 @@ test("browser authoring covers nested tiles, workspace tabs, undo/redo, and Inde
   await expect(
     stack.getByRole("button", { name: "Log", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Scene", exact: true }).click();
+  await openEditor(page, "Scene");
   await expect(page.getByLabel("Entity name")).toHaveValue("Trail Marker");
 });
 
@@ -235,11 +236,11 @@ test("a downloaded project can be reopened and exported as a playable browser fi
   page,
 }, testInfo) => {
   await editor(page);
-  await page.getByRole("button", { name: "UI", exact: true }).click();
+  await openEditor(page, "UI");
   await page.getByRole("button", { name: "Label", exact: true }).click();
   await page.getByLabel("Display text").fill("Find the lantern");
   await page.getByLabel("Display text").press("Enter");
-  await page.getByRole("button", { name: "Tilemap", exact: true }).click();
+  await openEditor(page, "Tilemap");
   const box = await page.getByLabel("Tilemap viewport").boundingBox();
   await page.mouse.click(
     box!.x + box!.width * 0.38,
@@ -558,10 +559,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await editor(page);
   const projectTree = page.locator(".project-panel");
   const inspector = page.locator(".world-inspector");
-  const workspace = (name: string) =>
-    page
-      .getByRole("navigation", { name: "Engine workspaces" })
-      .getByRole("button", { name, exact: true });
+  const workspace = (name: string) => openEditor(page, name);
   const number = async (name: string, value: string) => {
     const field = inspector.getByLabel(name, { exact: true });
     await field.fill(value);
@@ -583,7 +581,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await projectTree
     .getByRole("button", { name: "Ridge Workshop", exact: true })
     .click();
-  await workspace("Tilemap").click();
+  await workspace("Tilemap");
   await inspector.getByRole("button", { name: "Add Tile Layer" }).click();
   await inspector.getByRole("button", { name: "Add Terrain" }).click();
   const terrain = inspector.getByLabel("Terrain name");
@@ -595,7 +593,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   const box = (await tilemap.boundingBox())!;
   await page.mouse.click(box.x + box.width * 0.83, box.y + box.height * 0.24);
 
-  await workspace("Physics").click();
+  await workspace("Physics");
   await expect(page.getByTestId("physics-overlay")).toBeVisible();
   await number("Gravity Y", "320");
   await inspector
@@ -604,7 +602,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await expect(inspector.getByLabel("Body type")).toHaveValue("dynamic");
   await number("Initial velocity X", "12");
 
-  await workspace("Cameras").click();
+  await workspace("Cameras");
   await expect(page.getByTestId("camera-overlay")).toBeVisible();
   await number("Follow damping", "9");
   await page.getByRole("button", { name: "Preview Game Camera" }).click();
@@ -612,7 +610,7 @@ test("edits and saves each world workspace, and opens assets without applying th
     page.getByRole("button", { name: "Preview Game Camera" }),
   ).toHaveAttribute("aria-pressed", "true");
 
-  await workspace("Navigation").click();
+  await workspace("Navigation");
   await inspector
     .getByLabel("World entity")
     .selectOption({ label: "Pathfinder" });
@@ -631,7 +629,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await page.mouse.click(nav.x + nav.width * 0.56, nav.y + nav.height * 0.74);
   await expect(pick).toBeVisible();
 
-  await workspace("Lighting").click();
+  await workspace("Lighting");
   await inspector
     .getByLabel("World entity")
     .selectOption({ label: "Pressure Pad" });
@@ -682,7 +680,7 @@ test("edits and saves each world workspace, and opens assets without applying th
   await projectTree
     .getByRole("button", { name: "Ridge Workshop", exact: true })
     .click();
-  await workspace("Physics").click();
+  await workspace("Physics");
   await expect(inspector.getByLabel("Gravity Y")).toHaveValue("320");
 });
 
@@ -751,9 +749,7 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
 }) => {
   test.setTimeout(75_000);
   await editor(page);
-  const nav = page.getByRole("navigation", { name: "Engine workspaces" });
-  const workspace = (name: string) =>
-    nav.getByRole("button", { name, exact: true });
+  const workspace = (name: string) => openEditor(page, name);
   const byName = (name: string) =>
     page.getByRole("button", { name, exact: true });
   const value = async (label: string, text: string) => {
@@ -762,7 +758,7 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
     await input.press("Enter");
     await expect(input).toHaveValue(text);
   };
-  await workspace("Animator").click();
+  await workspace("Animator");
   await byName("State Machine").click();
   await byName("State").click();
   await byName("State").click();
@@ -777,7 +773,7 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
   ).toContainText("State 2");
   await byName("Pause Preview").click();
 
-  await workspace("Timeline").click();
+  await workspace("Timeline");
   await page
     .locator(".workspace-bar")
     .getByRole("button", { name: "Timeline", exact: true })
@@ -795,7 +791,7 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
     page.getByLabel("Timeline scene preview").locator("canvas"),
   ).toBeVisible();
 
-  await workspace("Particles").click();
+  await workspace("Particles");
   await byName("Emitter").click();
   await value("Burst count", "14");
   await page.getByLabel("Emit on scene start").uncheck();
@@ -804,7 +800,7 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
     page.getByLabel("Particle emitter preview").locator("canvas"),
   ).toBeVisible();
 
-  await workspace("Audio").click();
+  await workspace("Audio");
   await byName("Bus").click();
   const busName = page
     .getByRole("region", { name: "Bus 2 bus" })
@@ -835,7 +831,7 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
         .evaluate((meter: HTMLMeterElement) => meter.value),
     )
     .toBeGreaterThan(0.02);
-  await workspace("Blueprints").click();
+  await workspace("Blueprints");
   const stack = page.locator('[data-block-id="when-moving"]');
   await stack.getByLabel("Add block to then").selectOption("sound");
   await stack
@@ -901,10 +897,10 @@ test("authors an Animator transition, timeline keys, a particle burst and a rout
   await expect(
     page.getByText("Project opened.", { exact: true }),
   ).toBeVisible();
-  await workspace("Timeline").click();
+  await workspace("Timeline");
   await expect(page.getByLabel("Timeline name")).toHaveValue("Orbit test");
   await expect(byName("Key at 1 seconds")).toBeVisible();
-  await workspace("Audio").click();
+  await workspace("Audio");
   await byName("field-tone.wav").click();
   await expect(
     page.getByLabel("Sound output bus").locator("option:checked"),
@@ -992,10 +988,7 @@ test("authors and reopens typed data, then reads a sheet field through a Bluepri
   await editor(page);
   const button = (name: string) =>
     page.getByRole("button", { name, exact: true });
-  const workspace = (name: string) =>
-    page
-      .getByRole("navigation", { name: "Engine workspaces" })
-      .getByRole("button", { name, exact: true });
+  const workspace = (name: string) => openEditor(page, name);
   const tool = (name: string) =>
     page
       .getByRole("navigation", { name: "Data tools" })
@@ -1008,7 +1001,7 @@ test("authors and reopens typed data, then reads a sheet field through a Bluepri
   await fileMenu(page, "New Project");
   await page.getByLabel("Project name").fill("Station Ledger");
   await button("Create Project").click();
-  await workspace("Data").click();
+  await workspace("Data");
 
   await tool("Enums").click();
   await button("Add Enum").click();
@@ -1074,9 +1067,9 @@ test("authors and reopens typed data, then reads a sheet field through a Bluepri
   await button("Language").click();
   await enter("welcome es translation", "Bienvenido a la cumbre");
 
-  await workspace("Scene").click();
+  await workspace("Scene");
   await button("Entity").click();
-  await workspace("Blueprints").click();
+  await workspace("Blueprints");
   await button("New Blueprint").click();
   await page.getByLabel("Add block", { exact: true }).selectOption("log");
   await button("Edit Log value").click();
@@ -1093,7 +1086,7 @@ test("authors and reopens typed data, then reads a sheet field through a Bluepri
   await page
     .getByLabel("Log value record field", { exact: true })
     .selectOption({ label: "Rate" });
-  await workspace("Scene").click();
+  await workspace("Scene");
   await page
     .getByLabel("Entity blueprint", { exact: true })
     .selectOption({ label: "New Behaviour" });
@@ -1166,7 +1159,7 @@ test("authors and reopens typed data, then reads a sheet field through a Bluepri
   await expect(
     page.getByText("Project opened.", { exact: true }),
   ).toBeVisible();
-  await workspace("Data").click();
+  await workspace("Data");
   await tool("Sheets").click();
   await expect(page.getByLabel("summit Rate", { exact: true })).toHaveValue(
     "12",
@@ -1290,9 +1283,7 @@ test("authors nested UI, configures data and Blueprint actions, and exports the 
 }, testInfo) => {
   test.setTimeout(85_000);
   await editor(page);
-  const engine = page.getByRole("navigation", { name: "Engine workspaces" });
-  const workspace = (name: string) =>
-    engine.getByRole("button", { name, exact: true });
+  const workspace = (name: string) => openEditor(page, name);
   const inspector = page.locator(".widget-inspector");
   const add = async (name: string) => {
     const menu = page.locator(".ui-add-menu");
@@ -1306,7 +1297,7 @@ test("authors nested UI, configures data and Blueprint actions, and exports the 
     await input.fill(value);
     await input.press("Enter");
   };
-  await workspace("UI").click();
+  await workspace("UI");
   await add("Container");
   await enter("Widget name", "Signal Card");
   await enter("Widget width", "250");
@@ -1348,7 +1339,7 @@ test("authors nested UI, configures data and Blueprint actions, and exports the 
     "Deploy Beacon",
   );
 
-  await workspace("Blueprints").click();
+  await workspace("Blueprints");
   await page.getByLabel("Add block", { exact: true }).selectOption("ui");
   const tile = page
     .locator("article.logic-card")
@@ -1395,7 +1386,7 @@ test("authors nested UI, configures data and Blueprint actions, and exports the 
   await expect(
     page.getByText("Project opened.", { exact: true }),
   ).toBeVisible();
-  await workspace("UI").click();
+  await workspace("UI");
   await expect(
     page
       .locator(".ui-hierarchy")

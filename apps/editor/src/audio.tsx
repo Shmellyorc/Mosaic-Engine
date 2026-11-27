@@ -41,19 +41,20 @@ function Gain({
   );
 }
 
-export function AudioWorkspace() {
+export function AudioWorkspace({ soundId }: { soundId?: string } = {}) {
   const projectId = useEditor((state) => state.project.id);
-  return <MixerEditor key={projectId} />;
+  return <MixerEditor key={projectId} soundId={soundId} />;
 }
 
-function MixerEditor() {
+function MixerEditor({ soundId }: { soundId?: string }) {
   const mixer = useEditor((state) => state.project.mixer) ?? defaults;
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(soundId ?? "");
   const [importing, setImporting] = useState(false);
   const [level, setLevel] = useState(0);
   const preview = useRef<AudioMixer | null>(null);
-  const sound =
-    mixer.sounds.find(({ id }) => id === selected) ?? mixer.sounds[0];
+  const sound = soundId
+    ? mixer.sounds.find(({ id }) => id === soundId)
+    : (mixer.sounds.find(({ id }) => id === selected) ?? mixer.sounds[0]);
 
   useEffect(() => {
     const player = new AudioMixer(report);
@@ -97,10 +98,10 @@ function MixerEditor() {
     }
   }
   return (
-    <div className="workspace">
+    <div className={soundId ? "workspace sound-document" : "workspace"}>
       <div className="workspace-bar">
         <AudioLines size={17} />
-        <strong>Audio Mixer</strong>
+        <strong>{soundId ? sound?.name : "Audio Mixer"}</strong>
         <button
           className="push"
           disabled={importing || mixer.sounds.length >= 128}
@@ -231,7 +232,7 @@ function MixerEditor() {
         ) : (
           <div className="effect-grid sound-grid">
             <div className="effect-stack" aria-label="Sound library">
-              {mixer.sounds.map((item) => (
+              {(soundId ? [sound] : mixer.sounds).map((item) => (
                 <button
                   className="sound-row"
                   key={item.id}

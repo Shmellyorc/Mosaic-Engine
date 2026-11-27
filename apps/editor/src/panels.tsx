@@ -1,3 +1,4 @@
+import { documentKey, type DocumentRef } from "./documents";
 import { auditAssets } from "./asset-audit";
 import {
   Box,
@@ -26,15 +27,12 @@ import { resizeMap, WorldInspector } from "./world";
 import { BlueprintInspector, revealBlock, symbolName } from "./blueprint";
 import { displayValue, typeOf } from "@mosaic/blueprints";
 import { Field, NumberField, Section, TextField } from "./controls";
-import {
-  BlueprintAttachments,
-  ComponentInspector,
-  insertPrefab,
-} from "./entity-components";
+import { BlueprintAttachments, ComponentInspector } from "./entity-components";
 import { playGame, stepBlueprint } from "./play";
 import {
   chooseEntity,
   chooseScene,
+  openDocument,
   editEntity,
   editScene,
   selectedEntity,
@@ -126,12 +124,31 @@ function addScene() {
 export function ProjectPanel() {
   const project = useEditor((state) => state.project);
   const scene = useEditor(selectedScene);
-  const blueprint = useEditor((state) => state.blueprintId);
-  const asset = useEditor((state) => state.selectedAssetId);
+  const active = useEditor((state) => state.activeDocument);
   const [query, setQuery] = useState("");
-  const [prefabId, setPrefabId] = useState("");
+  const [entityPage, setEntityPage] = useState(0);
   const matches = (name: string) =>
     name.toLowerCase().includes(query.toLowerCase());
+  const row = (name: string, ref: DocumentRef, Icon = Box) => (
+    <button
+      key={documentKey(ref)}
+      className={`tree-row ${active === documentKey(ref) ? "selected" : ""}`}
+      onClick={() => openDocument(ref)}
+    >
+      <Icon size={15} />
+      <span>{name}</span>
+    </button>
+  );
+  const sceneRef = (kind: DocumentRef["kind"], id = scene.id): DocumentRef => ({
+    kind,
+    id,
+    sceneId: scene.id,
+  });
+  const entities = scene.entities.filter(({ name }) => matches(name));
+  const current = Math.min(
+    entityPage,
+    Math.max(0, Math.ceil(entities.length / 100) - 1),
+  );
   return (
     <div className="panel-body project-panel">
       <div className="search">
@@ -167,7 +184,7 @@ export function ProjectPanel() {
           .map((item) => (
             <button
               key={item.id}
-              className={`tree-row ${item.id === scene.id ? "selected" : ""}`}
+              className={`tree-row ${active === documentKey({ kind: "scene", id: item.id, sceneId: item.id }) ? "selected" : ""}`}
               onClick={() => chooseScene(item.id)}
             >
               <Layers3 size={15} />
@@ -178,29 +195,59 @@ export function ProjectPanel() {
             </button>
           ))}
       </details>
+      <details className="tree-group">
+        <summary>
+          <Folder size={15} /> Scene Assets
+        </summary>
+        {matches(scene.name) && (
+          <>
+            {row(scene.name + ".tilemap", sceneRef("tilemap"), Layers3)}
+            {row(scene.name + ".ui", sceneRef("ui"), Layers3)}
+          </>
+        )}
+        {scene.tilemap.layers
+          ?.filter(({ name }) => matches(name))
+          .map(({ id, name }) =>
+            row(name + ".tilemap", sceneRef("tilemap", id), Layers3),
+          )}
+        {scene.timelines
+          ?.filter(({ name }) => matches(name))
+          .map(({ id, name }) =>
+            row(name + ".timeline", sceneRef("timeline", id)),
+          )}
+        {entities.slice(current * 100, (current + 1) * 100).map((entity) => (
+          <div key={entity.id}>
+            {row(entity.name + ".entity", sceneRef("entity", entity.id))}
+            {(entity.animator || entity.clips.length > 0) &&
+              row(entity.name + ".animator", sceneRef("animator", entity.id))}
+            {entity.particles &&
+              row(entity.name + ".particles", sceneRef("particles", entity.id))}
+          </div>
+        ))}
+        {entities.length > 100 && (
+          <div className="inline-actions">
+            <button
+              disabled={current === 0}
+              onClick={() => setEntityPage(current - 1)}
+            >
+              Previous assets
+            </button>
+            <button
+              disabled={(current + 1) * 100 >= entities.length}
+              onClick={() => setEntityPage(current + 1)}
+            >
+              Next assets
+            </button>
+          </div>
+        )}
+      </details>
       <details open className="tree-group">
         <summary>
           <Folder size={15} /> Blueprints
         </summary>
         {project.blueprints
-          .filter((item) => matches(item.name))
-          .map((item) => (
-            <button
-              key={item.id}
-              className={`tree-row ${item.id === blueprint ? "selected" : ""}`}
-              onClick={() =>
-                useEditor.setState({
-                  blueprintId: item.id,
-                  workspace: "Blueprints",
-                  eventId: null,
-                  selectedTile: null,
-                })
-              }
-            >
-              <Code2 size={15} />
-              <span>{item.name}</span>
-            </button>
-          ))}
+          .filter(({ name }) => matches(name))
+          .map(({ id, name }) => row(name, { kind: "blueprint", id }, Code2))}
         {!project.blueprints.length && (
           <small className="tree-empty">No blueprints</small>
         )}
@@ -212,24 +259,9 @@ export function ProjectPanel() {
           </summary>
           {project.prefabs
             .filter(({ name }) => matches(name))
-            .map((prefab) => (
-              <button
-                key={prefab.id}
-                className={`tree-row ${prefab.id === prefabId ? "selected" : ""}`}
-                onClick={() => setPrefabId(prefab.id)}
-              >
-                <Box size={15} />
-                <span>{prefab.name}.prefab</span>
-              </button>
-            ))}
-          {project.prefabs.some(({ id }) => id === prefabId) && (
-            <button
-              className="section-button"
-              onClick={() => insertPrefab(prefabId)}
-            >
-              Instantiate prefab
-            </button>
-          )}
+            .map(({ id, name }) =>
+              row(name + ".prefab", { kind: "prefab", id }),
+            )}
         </details>
       )}
       <details open className="tree-group">
@@ -237,24 +269,15 @@ export function ProjectPanel() {
           <Folder size={15} /> Assets
         </summary>
         {project.assets
-          .filter((item) => matches(item.name))
-          .map((item) => (
-            <button
-              key={item.id}
-              className={`tree-row ${asset === item.id ? "selected" : ""}`}
-              title={"Preview " + item.name}
-              onClick={() => {
-                useEditor.setState({ selectedAssetId: item.id });
-                window.dispatchEvent(new Event("mosaic:show-assets"));
-              }}
-            >
-              <FileImage size={15} />
-              <span>{item.name}</span>
-            </button>
-          ))}
-        {!project.assets.length && (
-          <small className="tree-empty">No images</small>
-        )}
+          .filter(({ name }) => matches(name))
+          .map(({ id, name }) => row(name, { kind: "image", id }, FileImage))}
+        {project.mixer?.sounds
+          .filter(({ name }) => matches(name))
+          .map(({ id, name }) => row(name, { kind: "sound", id }))}
+        {matches("Project Data") &&
+          row("Project Data.data", { kind: "data", id: "project-data" })}
+        {matches("Input") &&
+          row("Input.input", { kind: "input", id: "project-input" })}
       </details>
     </div>
   );
@@ -268,15 +291,9 @@ export function AssetPanel({ onImport }: { onImport: () => void }) {
     result: Awaited<ReturnType<typeof auditAssets>>;
   }>();
   const [checking, setChecking] = useState(false);
-  const [page, setPage] = useState(0);
   const selected = useEditor(selectedEntity);
   const selectedAssetId = useEditor((state) => state.selectedAssetId);
   const asset = assets.find((item) => item.id === selectedAssetId);
-  const pageSize = 100;
-  const currentPage = Math.min(
-    page,
-    Math.max(0, Math.ceil(assets.length / pageSize) - 1),
-  );
   async function validate() {
     setChecking(true);
     try {
@@ -318,37 +335,6 @@ export function AssetPanel({ onImport }: { onImport: () => void }) {
           )}
         </section>
       )}
-      <div className="asset-grid">
-        {assets
-          .slice(currentPage * pageSize, (currentPage + 1) * pageSize)
-          .map((item) => (
-            <button
-              key={item.id}
-              className={item.id === selectedAssetId ? "selected" : ""}
-              aria-pressed={item.id === selectedAssetId}
-              onClick={() => useEditor.setState({ selectedAssetId: item.id })}
-            >
-              <img src={item.source} alt="" loading="lazy" decoding="async" />
-              <span>{item.name}</span>
-            </button>
-          ))}
-      </div>
-      {assets.length > pageSize && (
-        <div className="inline-actions">
-          <button
-            onClick={() => setPage(currentPage - 1)}
-            disabled={currentPage === 0}
-          >
-            Previous images
-          </button>
-          <button
-            onClick={() => setPage(currentPage + 1)}
-            disabled={(currentPage + 1) * pageSize >= assets.length}
-          >
-            Next images
-          </button>
-        </div>
-      )}
       {asset && (
         <section className="asset-details" aria-label="Asset preview">
           <strong>{asset.name}</strong>
@@ -359,6 +345,7 @@ export function AssetPanel({ onImport }: { onImport: () => void }) {
               editEntity((entity) => {
                 entity.visual = { kind: "sprite", assetId: asset.id };
                 entity.clips = [];
+                delete entity.animator;
               })
             }
           >
@@ -797,15 +784,10 @@ function EntityInspector() {
         </Field>
         {entity.blueprintId && (
           <button
-            onClick={() =>
-              useEditor.setState({
-                blueprintId: entity.blueprintId,
-                attachmentId: primaryAttachmentId,
-                workspace: "Blueprints",
-                eventId: null,
-                selectedTile: null,
-              })
-            }
+            onClick={() => {
+              openDocument({ kind: "blueprint", id: entity.blueprintId! });
+              useEditor.setState({ attachmentId: primaryAttachmentId });
+            }}
           >
             <Code2 size={14} /> Edit Blueprint
           </button>
