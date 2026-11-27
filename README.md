@@ -20,7 +20,7 @@ For browser-based development, start the Vite preview with `npm run dev`. The de
 - **Tilemap**, **Physics**, **Cameras**, **Navigation**, and **Lighting** provide dedicated world workspaces with editable controls and viewport previews.
 - **Animator**, **Timeline**, **Particles**, and **Audio** provide dedicated authoring and preview workspaces for gameplay effects.
 - **Data** opens tools for typed sheets, enums, structs, resources, globals, saves, and localization.
-- **UI** and **Input** place HUD labels and bind keyboard axes.
+- **UI** designs responsive game interfaces with a docked hierarchy and inspector. **Input** binds keyboard axes.
 - Click an image in the **Project** tree to open its **Assets** preview. Assign it to the selected entity with the explicit assignment button, or choose it as an autotile atlas in the Tilemap inspector.
 - **Window** reopens panels, saves named layouts, and resets docking. Drag panel tabs to group or split them, and drag the sash to resize. Right-click a panel tab for docking and sidebar controls.
 - **Play** creates a fresh runtime copy of the scene. Click **Game Preview** to give it keyboard focus. Pause holds the runtime, Restart creates a new instance, and Stop returns to authoring.
@@ -64,11 +64,21 @@ Choose **Lantern Signal Lab** from the sample’s scene list. Move with A/D or t
 
 Choose **Ridge Trading Post** from the sample’s scene list. Press Space to buy oil, P to save the Trading Ledger, and L to load it. The price, supplier, and trade limit are read from project data. The exported game can switch between English and Spanish and import a previous-version ledger.
 
+## Design a game interface
+
+- In **UI**, add a container, text, image, button, toggle, slider, text input, or progress bar. Select widgets on the canvas or in **Hierarchy**. Drag or nudge widgets in an anchored layout, resize fixed-size widgets from the lower-right corner, and use **Inspector** to edit bounds, margins, colors, borders, focus links, and nested order. Existing screen-space scene labels are available through **Label** and **Scene Labels**.
+- Set endpoints and a pivot for anchored widgets. Separated anchor endpoints stretch across the parent with edge insets. Containers can arrange children with horizontal or vertical layouts, spacing, padding, alignment, and grow. The project, wide, and portrait views let you check layout at different aspect ratios.
+- Interactive widgets use native button and form semantics. Give controls an accessible name when their visible text is insufficient. Tab follows the hierarchy order, arrow links move between selected controls, and an initial focus target can be set for play.
+- **On click** and **On value changed** pick a typed scene event. A button sends no payload, a toggle sends a Boolean, a slider sends a number, and a text input sends a string. Use **Set UI Widget** in a Blueprint to change text, visibility, enabled state, value, or focus.
+- Bind widget text and values to project globals, data records, or translations. A compatible interactive control can write its value back to a writable global. The live interface sits above the game canvas in both PixiJS and Canvas 2D and is included in standalone HTML exports.
+
+Choose **Lantern Watch** in the sample project. Open **Controls** to try the bound signal meter, night patrol toggle, call sign field, and language buttons. In the menu, use the arrow keys to move between **Deploy Beacon** and **Controls**.
+
 ## Rendering and export
 
 The same runtime feeds the PixiJS accelerated backend and the independent Canvas 2D renderer. **Auto Renderer** tries acceleration and switches to Canvas 2D if initialization fails or the rendering context is lost. Choose a backend explicitly from the toolbar. Canvas 2D is the compatibility API and can use hardware acceleration depending on the browser.
 
-**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images and WAV sounds, and the project data catalog. Open that file in a browser to play. The export runs without React or Electron.
+**Export** writes one offline HTML file with the starting scene, runtime code, project data, and embedded images and WAV sounds, the project data catalog, and the authored game interfaces. Open that file in a browser to play. The export runs without React or Electron.
 
 A Mosaic project folder contains a versioned `project.mosaic.json` file. The file embeds images and sounds and preserves entity IDs, hierarchy, scene settings, input axes, Animator definitions, effects, authored data and Blueprint data. Gameplay save files are separate from project files.
 
@@ -95,6 +105,6 @@ npx playwright install chromium
 npm run smoke
 ```
 
-The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, and `dist/ridge-trading-post.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the offline samples as run artifacts.
+The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, `dist/ridge-trading-post.html`, and `dist/lantern-watch.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Browser and packaged desktop smoke tests require a graphical session. On Linux CI, run them with `xvfb-run --auto-servernum npm run smoke`. The [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml) publishes a Linux x64 archive and the offline samples as run artifacts.
 
 MIT licensed.

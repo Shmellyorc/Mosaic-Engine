@@ -12,7 +12,7 @@ const sample = await build({
   absWorkingDir: root,
   stdin: {
     contents:
-      'export { exampleProject, workshopProject, signalLabProject, tradingPostProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
+      'export { exampleProject, workshopProject, signalLabProject, tradingPostProject, lanternWatchProject } from "@mosaic/example"; export { gameHtml } from "./apps/game/src/html.ts";',
     resolveDir: root,
   },
   format: "esm",
@@ -27,6 +27,7 @@ const {
   workshopProject,
   signalLabProject,
   tradingPostProject,
+  lanternWatchProject,
   gameHtml,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(sample.outputFiles[0].contents).toString("base64")}`
@@ -63,6 +64,10 @@ await Promise.all([
   writeFile(
     resolve(dist, "ridge-trading-post.html"),
     gameHtml(tradingPostProject(), bundle),
+  ),
+  writeFile(
+    resolve(dist, "lantern-watch.html"),
+    gameHtml(lanternWatchProject(), bundle),
   ),
   copyFile(resolve(root, "LICENSE"), resolve(desktop, "LICENSE")),
   writeFile(

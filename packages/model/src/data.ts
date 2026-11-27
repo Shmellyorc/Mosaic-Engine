@@ -118,6 +118,7 @@ export class DataIndex implements DataSymbols {
   >;
   readonly slots: Map<string, Catalog["saves"]["slots"][number]>;
   readonly locales: Set<string>;
+  private rowsById = new Map<string, Map<string, DataRow>>();
   private fieldTypes: Map<string, ReadonlyMap<string, ValueType>>;
 
   constructor(data: Catalog) {
@@ -147,6 +148,17 @@ export class DataIndex implements DataSymbols {
     this.translations = indexed(data.localization.entries);
     this.slots = indexed(data.saves.slots);
     this.locales = new Set(data.localization.locales);
+  }
+
+  rowById(sheetId: string, rowId: string) {
+    let rows = this.rowsById.get(sheetId);
+    if (!rows) {
+      const sheet = this.sheets.get(sheetId);
+      if (!sheet) return;
+      rows = indexed(sheet.rows);
+      this.rowsById.set(sheetId, rows);
+    }
+    return rows.get(rowId);
   }
 
   readType(source: DataSource, id: string): ValueType | undefined {

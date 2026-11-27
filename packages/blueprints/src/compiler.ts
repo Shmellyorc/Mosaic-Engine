@@ -13,6 +13,7 @@ import {
   type Signal,
   type Value,
   type ValueType,
+  type UiProperty,
 } from "./model";
 
 const MAX_ITERATIONS = 1024;
@@ -34,6 +35,7 @@ export type BlueprintContext = {
     language(locale: string): void;
   };
   effect?(command: EffectCommand): void;
+  ui?(id: string, property: UiProperty, value?: Value): void;
   log(blockId: string, value: Value): void;
   fault(diagnostic: Diagnostic): void;
   emit(signalId: string, value?: Value): void;
@@ -689,6 +691,26 @@ export function compileBlueprint(
             return fault("This runtime does not provide localization.");
           ctx.data.language(block.locale);
         };
+      case "ui": {
+        if (block.widgetId === "unassigned") error("Choose a UI widget.");
+        const type =
+          block.property === "value"
+            ? block.valueType
+            : block.property === "text"
+              ? "string"
+              : "boolean";
+        if (block.property !== "focus" && (!block.value || !type))
+          error("Choose a typed widget value.");
+        const value =
+          block.property !== "focus" && block.value
+            ? read(block.value, type)
+            : undefined;
+        return function* (ctx, locals) {
+          if (!ctx.ui)
+            return fault("This runtime does not provide UI widgets.");
+          ctx.ui(block.widgetId, block.property, value?.(ctx, locals));
+        };
+      }
       case "log": {
         const value = read(block.value);
         return function* (ctx, locals) {

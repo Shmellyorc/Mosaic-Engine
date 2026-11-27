@@ -1,3 +1,6 @@
+import { UiWorld } from "./ui";
+export { UiWorld } from "./ui";
+export { mountGameUi } from "./ui-dom";
 import { GameData, type SlotStorage } from "./data";
 export {
   GameData,
@@ -170,6 +173,13 @@ export function connectKeyboard(
 ) {
   const down = (event: Event) => {
     const key = event as KeyboardEvent;
+    if (
+      key.target instanceof HTMLElement &&
+      key.target.closest(
+        "button, input, textarea, select, [contenteditable='true']",
+      )
+    )
+      return;
     if (input.uses(key.code)) {
       key.preventDefault();
       input.press(key.code);
@@ -193,6 +203,7 @@ export function connectKeyboard(
 export class Game {
   readonly input: InputState;
   readonly data: GameData;
+  readonly ui: UiWorld;
   readonly logs: RuntimeLog[] = [];
   readonly scene: Scene;
   private scheduler: BlueprintScheduler;
@@ -251,6 +262,12 @@ export class Game {
     this.data = new GameData(project.id, project.data, slots);
     this.tiles = new TileWorld(scene.tilemap);
     this.scheduler = new BlueprintScheduler(STEP, debug);
+    this.ui = new UiWorld(scene.ui, this.data, (id, payload) => {
+      const type = this.signalTypes.get(id);
+      if (type !== (payload === undefined ? "void" : typeOf(payload)))
+        throw Error("The UI event is missing or has the wrong payload type.");
+      this.scheduler.queueUi(id, payload);
+    });
     this.assets = new Set(project.assets.map((asset) => asset.id));
     this.signals = project.signals ?? emptySignals;
     this.layerOrder = new Map(
@@ -401,6 +418,7 @@ export class Game {
         state.animation.play(clip);
       },
       effect: (command) => this.effect(state, command),
+      ui: (id, property, value) => this.ui.set(id, property, value),
       data: {
         read: (source, id, key) => this.data.read(source, id, key),
         write: (id, value) => this.data.write(id, value),

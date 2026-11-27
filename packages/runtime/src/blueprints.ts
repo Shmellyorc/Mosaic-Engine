@@ -50,7 +50,7 @@ export class BlueprintScheduler {
   private cursor = 0;
   private sleeping: Job[] = [];
   private deliveries: Delivery[] = [];
-  private contacts: { signalId: string; entityId: string; payload?: Value }[] =
+  private contacts: { signalId: string; entityId?: string; payload?: Value }[] =
     [];
   private listeners = new Map<string, { binding: Binding; entry: Entry }[]>();
   private updates: { binding: Binding; entry: Entry }[] = [];
@@ -86,7 +86,7 @@ export class BlueprintScheduler {
       );
       const changedEntities = new Set(Array.from(changed, ({ id }) => id));
       this.contacts = this.contacts.filter(
-        ({ entityId }) => !changedEntities.has(entityId),
+        ({ entityId }) => !entityId || !changedEntities.has(entityId),
       );
       if (this.pause && changed.has(this.pause.job.binding))
         this.pause = undefined;
@@ -118,7 +118,7 @@ export class BlueprintScheduler {
     for (const contact of this.contacts) {
       for (const { binding, entry } of this.listeners.get(contact.signalId) ??
         []) {
-        if (binding.id !== contact.entityId) continue;
+        if (contact.entityId && binding.id !== contact.entityId) continue;
         if (
           this.signalJobs >= MAX_SIGNAL_JOBS ||
           this.delivered >= MAX_DELIVERIES_PER_TICK
@@ -145,6 +145,13 @@ export class BlueprintScheduler {
       this.contacts.length < MAX_DELIVERIES_PER_TICK
     )
       this.contacts.push({ signalId, entityId, payload });
+  }
+  queueUi(signalId: string, payload?: Value) {
+    if (
+      this.listeners.has(signalId) &&
+      this.contacts.length < MAX_DELIVERIES_PER_TICK
+    )
+      this.contacts.push({ signalId, payload });
   }
   private enqueue(binding: Binding, entry: Entry, payload?: Value) {
     if (entry.kind === "update") {

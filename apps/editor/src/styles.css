@@ -1819,3 +1819,104 @@ button.tree-row {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.ui-toolbar {
+  flex-wrap: wrap;
+}
+.ui-add-menu {
+  position: relative;
+}
+.ui-add-menu summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border: 1px solid var(--edge);
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: #33264e;
+}
+.ui-add-menu > div {
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 8;
+  width: 146px;
+  padding: 4px;
+  border: 1px solid #6b538b;
+  border-radius: 6px;
+  background: #201b31;
+}
+.ui-add-menu > div > button {
+  width: 100%;
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+}
+.ui-add-menu > div > button:hover {
+  background: #3f2b5b;
+}
+.ui-stage {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background: #111321;
+}
+.ui-board {
+  position: relative;
+  outline: 1px solid #8068a6;
+  touch-action: none;
+  background: repeating-conic-gradient(#202236 0% 25%, #191b2b 0% 50%) 0 0 /
+    16px 16px;
+}
+.ui-board:focus-visible {
+  outline: 2px solid #ae82db;
+}
+.ui-board [data-widget-id] {
+  cursor: move;
+}
+.ui-selected-widget {
+  outline: 1px solid #f0bbff;
+  outline-offset: 1px;
+}
+.ui-selected-widget [data-ui-resize] {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+  border: 1px solid #29213e;
+  background: #f4d2ff;
+}
+.ui-live-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.ui-board-status span {
+  margin-left: auto;
+}
+.ui-hierarchy .tree-row[aria-pressed="true"] {
+  background: #382957;
+}
+.ui-legacy {
+  border-top: 1px solid var(--edge);
+  padding-top: 6px;
+  margin-top: 6px;
+}
+.ui-legacy strong {
+  padding-left: 7px;
+}
+.widget-inspector .ui-binding + .ui-binding {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--edge);
+}
+.ui-binding {
+  display: grid;
+  gap: 4px;
+}

@@ -5,6 +5,7 @@ import {
   browserSlotStorage,
   connectKeyboard,
   Game,
+  mountGameUi,
   MAX_SAVE_BYTES,
 } from "@mosaic/runtime";
 
@@ -114,6 +115,17 @@ async function boot() {
     browserSlotStorage("player"),
   );
   const showData = connectGameData(project, game);
+  const sceneLayer = document.createElement("div");
+  sceneLayer.style.cssText = "position:absolute;inset:0";
+  parent.append(sceneLayer);
+  const surface = game.ui.document.widgets.length
+    ? mountGameUi(parent, game.ui, {
+        width: project.width,
+        height: project.height,
+        assets: project.assets,
+        report,
+      })
+    : undefined;
   const audio = new AudioMixer(report);
   const audioButton =
     document.querySelector<HTMLButtonElement>("#enable-audio")!;
@@ -128,7 +140,10 @@ async function boot() {
     });
   }
   const detach = connectKeyboard(parent, game.input);
-  parent.addEventListener("pointerdown", () => parent.focus());
+  parent.addEventListener("pointerdown", (event) => {
+    if (!(event.target as HTMLElement).closest("[data-ui-control]"))
+      parent.focus();
+  });
   let renderer: Renderer | undefined;
   let loading = false;
   let request = 0;
@@ -162,7 +177,7 @@ async function boot() {
       }
       renderer?.dispose();
       renderer = next;
-      parent.replaceChildren(mount);
+      sceneLayer.replaceChildren(mount);
       draw();
     } catch (failure) {
       report(String(failure));
@@ -175,6 +190,7 @@ async function boot() {
     last = now;
     if (!loading) game.advance(dt);
     showData?.();
+    surface?.update();
     if (audioReady) game.consumeAudio((command) => audio.dispatch(command));
     const failure = game.logs.findLast(
       (entry) => entry.level === "error",
@@ -201,6 +217,7 @@ async function boot() {
     request++;
     cancelAnimationFrame(frame);
     detach();
+    surface?.destroy();
     audio.dispose();
     renderer?.dispose();
   });

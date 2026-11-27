@@ -13,6 +13,7 @@ import {
   fitFrame,
   Game,
   inversePoint,
+  mountGameUi,
   pickEntity,
   transformPoint,
   type Camera,
@@ -123,6 +124,49 @@ export function RenderSurface({
   );
 }
 
+function GameUiPreview({
+  author,
+  transport,
+}: {
+  author: Game;
+  transport: "editing" | "playing" | "paused";
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const mode = useRef(transport);
+  useEffect(() => {
+    mode.current = transport;
+  }, [transport]);
+  useEffect(() => {
+    let current: Game | undefined;
+    let overlay: ReturnType<typeof mountGameUi> | undefined;
+    let frame = 0;
+    const tick = () => {
+      const game = mode.current === "editing" ? author : (playGame() ?? author);
+      if (current !== game) {
+        current = game;
+        overlay?.destroy();
+        overlay = game.ui.document.widgets.length
+          ? mountGameUi(host.current!, game.ui, {
+              width: game.project.width,
+              height: game.project.height,
+              assets: game.project.assets,
+              report: (message) =>
+                useEditor.getState().report(message, "error"),
+            })
+          : undefined;
+      }
+      overlay?.update(mode.current === "playing");
+      frame = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => {
+      cancelAnimationFrame(frame);
+      overlay?.destroy();
+    };
+  }, [author]);
+  return <div className="ui-live-preview" ref={host} />;
+}
+
 export function GamePreview() {
   const project = useEditor((state) => state.project);
   const scene = useEditor(selectedScene);
@@ -164,13 +208,17 @@ export function GamePreview() {
         tabIndex={0}
         aria-label="Focus game controls"
         ref={view}
-        onPointerDown={(event) => event.currentTarget.focus()}
+        onPointerDown={(event) => {
+          if (!(event.target as HTMLElement).closest("[data-widget-id]"))
+            event.currentTarget.focus();
+        }}
       >
         <RenderSurface
           label="Game preview"
           assets={project.assets}
           getFrame={() => playGame()?.frame() ?? author.frame()}
         />
+        <GameUiPreview author={author} transport={playing} />
       </div>
       <div className="panel-foot">
         <span className={`dot ${playing}`} />

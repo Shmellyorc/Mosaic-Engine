@@ -74,6 +74,7 @@ type EditorState = {
   location?: ProjectLocation;
   sceneId: string;
   entityId: string | null;
+  widgetId: string | null;
   blueprintId: string | null;
   selectedAssetId: string | null;
   activeTileLayer: string | null;
@@ -107,6 +108,7 @@ export const useEditor = create<EditorState>((set) => ({
   saved: project,
   sceneId: project.startSceneId,
   entityId: "player",
+  widgetId: null,
   blueprintId: "movement",
   selectedAssetId: null,
   activeTileLayer: null,
@@ -185,6 +187,7 @@ export const useEditor = create<EditorState>((set) => ({
           ?.entities.find((entity) => entity.blueprintId)?.id ?? null,
       blueprintId: next.blueprints[0]?.id ?? null,
       selectedAssetId: null,
+      widgetId: null,
       activeTileLayer: null,
       activeTerrain: null,
       breakpoints: readBreakpoints(next.id),
@@ -268,6 +271,7 @@ export function chooseScene(sceneId: string) {
   useEditor.setState({
     sceneId,
     entityId: null,
+    widgetId: null,
     transport: "editing",
     workspace: "Scene",
   });

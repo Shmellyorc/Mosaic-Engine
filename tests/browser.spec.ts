@@ -1283,3 +1283,217 @@ test("the offline trading post persists slots, migrates portable progress and sw
   await rendered("Bottles  0");
   await expect(page.locator("#runtime-error")).toBeEmpty();
 });
+
+test("authors nested UI, configures data and Blueprint actions, and exports the result", async ({
+  page,
+  context,
+}, testInfo) => {
+  test.setTimeout(85_000);
+  await editor(page);
+  const engine = page.getByRole("navigation", { name: "Engine workspaces" });
+  const workspace = (name: string) =>
+    engine.getByRole("button", { name, exact: true });
+  const inspector = page.locator(".widget-inspector");
+  const add = async (name: string) => {
+    const menu = page.locator(".ui-add-menu");
+    await menu.locator("summary").click();
+    await menu
+      .getByRole("button", { name: "Add " + name, exact: true })
+      .click();
+  };
+  const enter = async (label: string, value: string) => {
+    const input = inspector.getByLabel(label, { exact: true });
+    await input.fill(value);
+    await input.press("Enter");
+  };
+  await workspace("UI").click();
+  await add("Container");
+  await enter("Widget name", "Signal Card");
+  await enter("Widget width", "250");
+  await enter("Widget height", "130");
+  await inspector.getByLabel("Widget anchor preset").selectOption("Center");
+  await inspector.getByLabel("Container layout").selectOption("column");
+
+  const board = page.getByLabel("UI design canvas");
+  await page.getByLabel("UI preview size").selectOption("portrait");
+  const portrait = await board.boundingBox();
+  expect(portrait!.height).toBeGreaterThan(portrait!.width);
+  const panel = board.locator('[data-widget-kind="container"]');
+  const position = (await panel.boundingBox())!;
+  await page.mouse.move(position.x + 3, position.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(position.x + 21, position.y + 10, { steps: 4 });
+  await page.mouse.up();
+  await expect(
+    inspector.getByLabel("Widget X", { exact: true }),
+  ).not.toHaveValue("0");
+
+  await add("Button");
+  await enter("Widget name", "Launch Signal");
+  await enter("Widget text", "Launch this signal");
+  await inspector.getByText("Data Binding", { exact: true }).click();
+  await inspector.getByLabel("Text binding source").selectOption("translation");
+  await inspector
+    .getByLabel("Text binding entry")
+    .selectOption({ label: "watch-deploy" });
+  await inspector
+    .getByText("Interaction and Accessibility", { exact: true })
+    .click();
+  await enter("Widget accessible name", "Deploy signal");
+  await inspector
+    .getByLabel("Widget event")
+    .selectOption({ label: "Beacon Deployed" });
+  await inspector.getByLabel("Initial UI focus").check();
+  await expect(board.locator('[data-widget-kind="button"]')).toContainText(
+    "Deploy Beacon",
+  );
+
+  await workspace("Blueprints").click();
+  await page.getByLabel("Add block", { exact: true }).selectOption("ui");
+  const tile = page
+    .locator("article.logic-card")
+    .filter({ has: page.getByLabel("Target widget", { exact: true }) });
+  await tile
+    .getByLabel("Target widget", { exact: true })
+    .selectOption({ label: "Launch Signal" });
+  await tile.getByLabel("Widget action", { exact: true }).selectOption("text");
+  await tile
+    .getByRole("button", { name: "Edit Widget action value", exact: true })
+    .click();
+  const text = tile.getByLabel("Widget action value value", { exact: true });
+  await text.fill("Ready for launch");
+  await text.press("Enter");
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  const stored = await readFile((await (await download).path())!, "utf8");
+  const archive = parseProject(stored);
+  const ui = archive.scenes[0].ui!;
+  const [container, button] = ui.widgets;
+  expect(container).toMatchObject({
+    name: "Signal Card",
+    layout: { mode: "column" },
+    rect: { left: 0.5, right: 0.5, width: 250 },
+  });
+  expect(container.rect.x).not.toBe(0);
+  expect(button).toMatchObject({
+    kind: "button",
+    parent: container.id,
+    signal: "watch-start",
+    textBinding: { id: "watch-local-launch" },
+  });
+  expect(ui.initialFocus).toBe(button.id);
+  const choose = page.waitForEvent("filechooser");
+  await fileMenu(page, "Open Project");
+  await (
+    await choose
+  ).setFiles({
+    name: "interface.mosaic.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(stored),
+  });
+  await expect(
+    page.getByText("Project opened.", { exact: true }),
+  ).toBeVisible();
+  await workspace("UI").click();
+  await expect(
+    page
+      .locator(".ui-hierarchy")
+      .getByRole("button", { name: "Launch Signal" }),
+  ).toBeVisible();
+
+  const extraction = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const path = testInfo.outputPath("interface.html");
+  await (await extraction).saveAs(path);
+  const game = await context.newPage();
+  await game.goto(pathToFileURL(path).href);
+  const launch = game.getByRole("button", {
+    name: "Deploy signal",
+    exact: true,
+  });
+  await expect(launch).toHaveText("Ready for launch");
+  await expect(launch).toBeFocused();
+  await expect(game.locator("#runtime-error")).toBeEmpty();
+  await game.close();
+});
+
+test("offline Lantern Watch exposes responsive, keyboard-accessible widgets across both backends", async ({
+  page,
+  context,
+}) => {
+  await context.setOffline(true);
+  await page.goto(pathToFileURL(resolve("dist/lantern-watch.html")).href);
+  const renderer = page.locator("#runtime-status");
+  await expect(renderer).toHaveText("PixiJS accelerated");
+  const home = page.locator('[data-widget-id="watch-home"]');
+  const deploy = home.getByRole("button", {
+    name: "Deploy Beacon",
+    exact: true,
+  });
+  await expect(deploy).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    home.getByRole("button", { name: "Controls", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  const slider = page.getByRole("slider", { name: "Beacon strength" });
+  await expect(slider).toBeFocused();
+  await slider.fill("73");
+  const meter = page.getByRole("progressbar", { name: "Signal" });
+  await expect(meter).toHaveAttribute("value", "73");
+  await expect(page.getByText("73%", { exact: true })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Night patrol" }).check();
+  await expect(
+    page.getByText("Night patrol active", { exact: true }),
+  ).toBeVisible();
+
+  const call = page.getByRole("textbox", { name: "Call sign" });
+  await call.fill("North");
+  await expect(
+    page.getByText("Call sign • North", { exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Back", exact: true }),
+  ).toBeFocused();
+  await page.getByRole("button", { name: "Español", exact: true }).click();
+  const translatedSlider = page.getByRole("slider", {
+    name: "Potencia del farol",
+  });
+  await expect(translatedSlider).toHaveValue("73");
+
+  await page.locator("#backend").selectOption("canvas");
+  await expect(renderer).toHaveText("Canvas 2D");
+  await page.setViewportSize({ width: 420, height: 720 });
+  const bounds = await page.locator("#game").boundingBox();
+  const controls = await page
+    .locator('[data-widget-id="watch-options"]')
+    .boundingBox();
+  expect(controls).not.toBeNull();
+  expect(controls!.x).toBeGreaterThanOrEqual(bounds!.x);
+  expect(controls!.x + controls!.width).toBeLessThanOrEqual(
+    bounds!.x + bounds!.width,
+  );
+  await expect(translatedSlider).toHaveValue("73");
+  await expect(
+    page.getByRole("checkbox", { name: "Vigilancia nocturna" }),
+  ).toBeChecked();
+  await expect(page.getByRole("textbox", { name: "Indicativo" })).toHaveValue(
+    "North",
+  );
+
+  await page.getByRole("button", { name: "Volver", exact: true }).click();
+  await expect(home.getByText("VIGILIA DEL FAROL")).toBeVisible();
+  const launch = home.getByRole("button", {
+    name: "Encender farol",
+    exact: true,
+  });
+  await launch.press("Space");
+  await expect(
+    home.getByText("Farol encendido", { exact: true }),
+  ).toBeVisible();
+  await expect(launch).toBeDisabled();
+  await expect(page.locator("#runtime-error")).toBeEmpty();
+});

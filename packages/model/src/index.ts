@@ -10,6 +10,8 @@ import {
   timelineSchema,
 } from "./effects";
 import { catalogSchema, validateCatalog } from "./data";
+import { uiSchema, validateUi } from "./ui";
+export * from "./ui";
 export * from "./effects";
 export * from "./data";
 
@@ -219,6 +221,7 @@ const sceneSchema = z.object({
     .max(128),
   entities: z.array(entitySchema).max(20000),
   timelines: z.array(timelineSchema).max(64).optional(),
+  ui: uiSchema.optional(),
   gravity: z.object({ x: rate, y: rate }).optional(),
   lighting: z.object({ ambient: color, enabled: z.boolean() }).optional(),
   tilemap: z.object({
@@ -309,6 +312,7 @@ export function validateProject(input: unknown): Project {
   if (!sceneIds.has(project.startSceneId))
     throw new Error("The starting scene is missing.");
   for (const scene of project.scenes) {
+    if (scene.ui) validateUi(scene.ui, assetIds);
     const layerIds = idsOf(scene.layers, "layer");
     const entityIds = idsOf(scene.entities, "entity");
     const parents = new Map(

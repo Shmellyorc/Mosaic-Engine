@@ -63,6 +63,7 @@ export class GameData {
   readonly index: DataIndex;
   private values: Map<string, Value>;
   private locale: string;
+  revision = 0;
   private records = new WeakMap<Record<string, Scalar>, Value>();
   private migrations: Map<number, Catalog["saves"]["migrations"][number]>;
   private savedIds: string[];
@@ -148,14 +149,20 @@ export class GameData {
       throw Error("The global is missing or constant.");
     if (!this.index.globalMatches(definition, value))
       throw Error(`The value does not match global "${definition.name}".`);
-    this.values.set(id, copyValue(value));
+    if (this.values.get(id) !== value) {
+      this.values.set(id, copyValue(value));
+      this.revision++;
+    }
   }
 
   setLanguage(tag: string) {
     const canonical = languageTag(tag);
     if (!canonical || !this.index.hasLocale(canonical))
       throw Error("The language is unavailable in this project.");
-    this.locale = canonical;
+    if (this.locale !== canonical) {
+      this.locale = canonical;
+      this.revision++;
+    }
   }
 
   encode() {
@@ -245,6 +252,7 @@ export class GameData {
       values.set(id, copyValue(value));
     }
     this.values = values;
+    this.revision++;
     this.locale = this.index.hasLocale(save.locale)
       ? save.locale
       : this.catalog.localization.default;

@@ -19,6 +19,7 @@ import {
   Radio,
   ArrowUpRight,
   AudioLines,
+  Monitor,
   Database,
   Globe,
   Save,
@@ -51,6 +52,7 @@ import {
   motionPropertySchema,
   type EffectCommand,
   dataSourceSchema,
+  uiPropertySchema,
   type DataSource,
   type Binary,
   type Block,
@@ -63,6 +65,8 @@ import {
   createBlueprint,
   emptySignals,
   indexCatalog,
+  interactiveWidget,
+  widgetValueType,
   type Catalog,
   newId,
   type Project,
@@ -206,6 +210,13 @@ const kinds = {
     description: "Change the active language for translation lookups.",
     tone: "blue",
     Icon: Globe,
+  },
+  ui: {
+    name: "Set UI Widget",
+    description:
+      "Change widget text, visibility, enabled state, control value, or focus.",
+    tone: "purple",
+    Icon: Monitor,
   },
   property: {
     name: "Set Property",
@@ -432,6 +443,14 @@ function makeBlock(
       return { id, kind, slotId: "unassigned", operation: "save" };
     case "language":
       return { id, kind, locale: "" };
+    case "ui":
+      return {
+        id,
+        kind,
+        widgetId: "unassigned",
+        property: "visible",
+        value: literal(true),
+      };
     case "property":
       return { id, kind, property: "visible", value: literal(true) };
     case "log":
@@ -1990,6 +2009,93 @@ function DataBlockFields({
   }
 }
 
+function UiBlockFields({
+  block,
+  expression,
+  replace,
+}: {
+  block: Extract<Block, { kind: "ui" }>;
+  expression: RenderExpression;
+  replace: (block: Block) => void;
+}) {
+  const widgets = useEditor((state) => selectedScene(state).ui?.widgets);
+  const widget = widgets?.find(({ id }) => id === block.widgetId);
+  const valueType = widget ? widgetValueType(widget.kind) : block.valueType;
+  const options = uiPropertySchema.options.filter((property) =>
+    property === "value"
+      ? Boolean(valueType)
+      : property === "focus"
+        ? !!widget && interactiveWidget(widget.kind)
+        : property === "text"
+          ? widget?.kind !== "container"
+          : true,
+  );
+  const choose = (property: typeof block.property) => {
+    const type =
+      property === "value"
+        ? valueType
+        : property === "text"
+          ? "string"
+          : "boolean";
+    replace({
+      ...block,
+      property,
+      valueType: property === "value" ? valueType : undefined,
+      value:
+        property === "focus" || !type
+          ? undefined
+          : literal(
+              property === "visible" || property === "enabled"
+                ? true
+                : defaultValue[type],
+            ),
+    });
+  };
+  const type =
+    block.property === "value"
+      ? block.valueType
+      : block.property === "text"
+        ? "string"
+        : "boolean";
+  return (
+    <>
+      <EffectChoice
+        label="Target widget"
+        value={block.widgetId}
+        options={widgets ?? []}
+        change={(widgetId) =>
+          replace({
+            ...block,
+            widgetId,
+            property: "visible",
+            value: literal(true),
+            valueType: undefined,
+          })
+        }
+      />
+      <EffectChoice
+        label="Widget action"
+        value={block.property}
+        options={options.map((id) => ({
+          id,
+          name: id.charAt(0).toUpperCase() + id.slice(1),
+        }))}
+        change={(value) => choose(uiPropertySchema.parse(value))}
+      />
+      {block.property !== "focus" && block.value && (
+        <Field label="Value">
+          {expression(
+            "Widget action value",
+            block.value,
+            (value) => replace({ ...block, value }),
+            type,
+          )}
+        </Field>
+      )}
+    </>
+  );
+}
+
 function AdvancedFields({
   block,
   blueprint,
@@ -2008,6 +2114,15 @@ function AdvancedFields({
   replace: (block: Block) => void;
 }) {
   switch (block.kind) {
+    case "ui":
+      return (
+        <UiBlockFields
+          block={block}
+          expression={expression}
+          replace={replace}
+        />
+      );
+
     case "writeGlobal":
     case "saveSlot":
     case "language":

@@ -114,6 +114,14 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     await page.getByLabel("Global name", { exact: true }).fill("Native Score");
     await page.getByLabel("Global name", { exact: true }).press("Enter");
     await page.getByLabel("Save global", { exact: true }).check();
+    await workspaces.getByRole("button", { name: "UI", exact: true }).click();
+    const palette = page.locator(".ui-add-menu");
+    await palette.locator("summary").click();
+    await palette
+      .getByRole("button", { name: "Add Button", exact: true })
+      .click();
+    await page.getByLabel("Widget text", { exact: true }).fill("Native Action");
+    await page.getByLabel("Widget text", { exact: true }).press("Enter");
     await workspaces
       .getByRole("button", { name: "Scene", exact: true })
       .click();
@@ -167,6 +175,10 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       name: "Native Score",
       saved: true,
     });
+    expect(saved.scenes[0].ui?.widgets[0]).toMatchObject({
+      kind: "button",
+      text: "Native Action",
+    });
     const entity = saved.scenes[0].entities[0];
     expect(entity.name).toBe("Lantern");
     expect(entity.visual).toEqual({
@@ -203,6 +215,9 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
       "Native Trail",
     );
     await expect(exportedPage.locator("#game canvas")).toBeVisible();
+    await expect(
+      exportedPage.getByRole("button", { name: "Native Action", exact: true }),
+    ).toBeVisible();
     await exportedPage.close();
   } finally {
     await electron.close();

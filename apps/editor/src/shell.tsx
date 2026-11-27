@@ -60,6 +60,9 @@ import { TimelineWorkspace } from "./timeline";
 import { ParticlesWorkspace } from "./particles";
 import { AudioWorkspace } from "./audio";
 import { DataWorkspace } from "./data-workspace";
+import { UiDesigner, UiHierarchy } from "./ui-designer";
+import { UiInspector } from "./ui-inspector";
+import { selectedWidget } from "./ui-author";
 import { GamePreview, SceneViewport } from "./viewport";
 import { worldTools } from "./world";
 import {
@@ -165,19 +168,23 @@ function WorkspacePanel() {
       {workspace === "Particles" && <ParticlesWorkspace />}
       {workspace === "Audio" && <AudioWorkspace />}
       {workspace === "Data" && <DataWorkspace />}
-      {workspace === "UI" && (
-        <div className="workspace scene-wrap">
-          <div className="context-actions">
-            <button onClick={() => addEntity("text")}>
-              <Plus size={14} /> Label
-            </button>
-          </div>
-          <SceneViewport ui />
-        </div>
-      )}
+      {workspace === "UI" && <UiDesigner />}
       {workspace === "Input" && <InputWorkspace />}
     </>
   );
+}
+
+function DockedHierarchy() {
+  return useEditor((state) => state.workspace) === "UI" ? (
+    <UiHierarchy />
+  ) : (
+    <HierarchyPanel />
+  );
+}
+function DockedInspector() {
+  const workspace = useEditor((state) => state.workspace);
+  const widget = useEditor(selectedWidget);
+  return workspace === "UI" && widget ? <UiInspector /> : <InspectorPanel />;
 }
 
 const registry: Record<
@@ -206,7 +213,7 @@ const registry: Record<
   },
   hierarchy: {
     title: "Hierarchy",
-    component: HierarchyPanel,
+    component: DockedHierarchy,
     icon: Layers3,
     width: 165,
     height: 100,
@@ -227,7 +234,7 @@ const registry: Record<
   },
   inspector: {
     title: "Inspector",
-    component: InspectorPanel,
+    component: DockedInspector,
     icon: LayoutPanelLeft,
     width: 212,
     height: 120,
@@ -416,6 +423,9 @@ export function App() {
   const [layoutName, setLayoutName] = useState("");
   const [projectTitle, setProjectTitle] = useState("");
   const modal = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (workspace === "UI") api?.getPanel("hierarchy")?.api.setActive();
+  }, [api, workspace]);
   function newProject() {
     if (!discard()) return;
     setProjectTitle("");

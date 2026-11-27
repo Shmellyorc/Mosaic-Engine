@@ -201,6 +201,16 @@ export type EffectCommand =
   | { kind: "particles"; operation: "burst" | "start" | "stop" }
   | { kind: "sound"; soundId: string; playing: boolean };
 
+export const uiPropertySchema = z.enum([
+  "text",
+  "visible",
+  "enabled",
+  "value",
+  "focus",
+]);
+export const uiValueTypeSchema = z.enum(["string", "boolean", "number"]);
+export type UiProperty = z.infer<typeof uiPropertySchema>;
+
 type BlockData =
   | { kind: "set"; variable: string; value: Expression }
   | { kind: "let"; name: string; type: ValueType; value: Expression }
@@ -230,6 +240,13 @@ type BlockData =
   | { kind: "writeGlobal"; globalId: string; value: Expression }
   | { kind: "saveSlot"; slotId: string; operation: "save" | "load" }
   | { kind: "language"; locale: string }
+  | {
+      kind: "ui";
+      widgetId: string;
+      property: UiProperty;
+      valueType?: z.infer<typeof uiValueTypeSchema>;
+      value?: Expression;
+    }
   | { kind: "log"; value: Expression }
   | {
       kind: "call";
@@ -336,6 +353,14 @@ const blockSchema: z.ZodType<Block> = z.lazy(() =>
       operation: z.enum(["save", "load"]),
     }),
     z.object({ id, kind: z.literal("language"), locale: text }),
+    z.object({
+      id,
+      kind: z.literal("ui"),
+      widgetId: id,
+      property: uiPropertySchema,
+      valueType: uiValueTypeSchema.optional(),
+      value: expressionSchema.optional(),
+    }),
     z.object({ id, kind: z.literal("log"), value: expressionSchema }),
     z.object({
       id,

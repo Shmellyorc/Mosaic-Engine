@@ -1,4 +1,11 @@
 import {
+  addWatchData,
+  lanternWatchScene,
+  LANTERN_WATCH_ID,
+  watchBlueprint,
+  watchSignals,
+} from "./lantern-watch";
+import {
   marketBlueprint,
   marketData,
   marketInputs,
@@ -147,9 +154,10 @@ export function exampleProject(): Project {
       { id: "beacon-glow", name: "Beacon Glow", type: "boolean" },
       workshopSignal,
       labSignal,
+      ...watchSignals,
     ],
     mixer: signalMixer(),
-    data: marketData(),
+    data: addWatchData(marketData()),
     assets: [
       { id: "ridge-art", name: "Ridge panorama", source: landscape },
       { id: "keeper-art", name: "Lantern spritesheet", source: sheet },
@@ -192,6 +200,7 @@ export function exampleProject(): Project {
       workshopScene(player),
       signalLabScene(player),
       tradingPostScene(player),
+      lanternWatchScene(),
     ],
     blueprints: [
       {
@@ -299,6 +308,7 @@ export function exampleProject(): Project {
       ...workshopBlueprints,
       ...signalBlueprints,
       marketBlueprint,
+      watchBlueprint,
     ],
   };
 }
@@ -324,5 +334,13 @@ export function tradingPostProject(): Project {
     ...exampleProject(),
     name: "Ridge Trading Post",
     startSceneId: TRADING_POST_ID,
+  };
+}
+
+export function lanternWatchProject(): Project {
+  return {
+    ...exampleProject(),
+    name: "Lantern Watch",
+    startSceneId: LANTERN_WATCH_ID,
   };
 }
