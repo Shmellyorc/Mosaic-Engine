@@ -41,12 +41,24 @@ for (const renderer of renderers) {
       expect(page.getByText(label, { exact: true }).first()).toBeVisible({
         timeout: 12000,
       });
-    // The floor and ceiling physically stop the runner at the two stamp lanes.
-    await hold("ArrowUp", () => page.waitForTimeout(850));
+    const clock = page.locator('[data-widget-id="clock"]');
+    const secondsLeft = async () =>
+      Number.parseInt(await clock.innerText(), 10);
+    const moveToLane = async (key: string) => {
+      // Two in-game seconds guarantee an unobstructed crossing to the wall
+      // even when software rendering advances simulation slower than wall time.
+      const before = await secondsLeft();
+      await hold(key, () =>
+        expect
+          .poll(secondsLeft, { timeout: 12000 })
+          .toBeLessThanOrEqual(before - 2),
+      );
+    };
+    await moveToLane("ArrowUp");
     await hold("ArrowRight", () => reach("Stamps 1 / 3"));
-    await hold("ArrowDown", () => page.waitForTimeout(1500));
+    await moveToLane("ArrowDown");
     await hold("ArrowRight", () => reach("Stamps 2 / 3"));
-    await hold("ArrowUp", () => page.waitForTimeout(1500));
+    await moveToLane("ArrowUp");
     await hold("ArrowRight", () => reach("Delivery complete!"));
     await expect(page.getByText("Stamps 3 / 3", { exact: true })).toBeVisible();
     const best = await page.getByText(/^Best \d/).innerText();
