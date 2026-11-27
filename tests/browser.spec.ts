@@ -1402,7 +1402,7 @@ test("authors nested UI, configures data and Blueprint actions, and exports the 
   await expect(
     page
       .locator(".ui-hierarchy")
-      .getByRole("button", { name: "Launch Signal" }),
+      .getByRole("button", { name: "Launch Signal", exact: true }),
   ).toBeVisible();
 
   const extraction = page.waitForEvent("download");
