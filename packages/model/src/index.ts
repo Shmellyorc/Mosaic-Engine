@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   blueprintSchema,
+  children as blockChildren,
+  type Block,
   blueprintValueSchema,
   typeOf,
   extensionSchema,
@@ -690,30 +692,50 @@ export function parseProject(source: string): Project {
   }
   return validateProject(value);
 }
+function usesFlowBlock(blocks: Block[]): boolean {
+  return blocks.some(
+    (block) =>
+      block.kind === "sceneFlow" ||
+      block.kind === "screen" ||
+      blockChildren(block).some(({ blocks }) => usesFlowBlock(blocks)),
+  );
+}
+
 export function serializeProject(project: Project): string {
   const modern =
     project.version === 2 ||
     !!project.prefabs?.length ||
-    project.scenes.some(({ entities }) =>
-      entities.some(
-        (entity) =>
-          !!(
-            entity.attachments?.length ||
-            entity.prefab ||
-            entity.persistent ||
-            entity.camera ||
-            entity.tileLayers?.length ||
-            entity.audio
-          ),
-      ),
+    project.scenes.some(
+      ({ entities, ui }) =>
+        ui?.widgets.some(
+          ({ appearance, locked, panel, styleOverride }) =>
+            appearance !== undefined ||
+            locked !== undefined ||
+            panel !== undefined ||
+            styleOverride !== undefined,
+        ) ||
+        entities.some(
+          (entity) =>
+            !!(
+              entity.attachments?.length ||
+              entity.prefab ||
+              entity.persistent ||
+              entity.camera ||
+              entity.tileLayers?.length ||
+              entity.audio
+            ),
+        ),
     ) ||
     !!project.sceneFlow ||
     !!project.uiFlow ||
     !!project.behaviorTrees?.length ||
     !!project.audioCreation ||
     project.blueprints.some(
-      ({ requires, variables }) =>
-        !!requires?.length || variables.some(({ exposed }) => exposed),
+      ({ requires, variables, events, functions }) =>
+        !!requires?.length ||
+        variables.some(({ exposed }) => exposed) ||
+        events.some(({ blocks }) => usesFlowBlock(blocks)) ||
+        functions?.some(({ blocks }) => usesFlowBlock(blocks)),
     );
   const source = JSON.stringify(
     validateProject(

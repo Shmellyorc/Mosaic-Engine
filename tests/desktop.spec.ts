@@ -218,6 +218,15 @@ test("packaged desktop creates, imports, saves, opens and exports a working proj
     ).toBeVisible();
     await page.getByRole("button", { name: "Stop", exact: true }).click();
 
+    await fileAction("Open Relay Isles");
+    await page.getByRole("button", { name: "Play", exact: true }).click();
+    for (const relay of ["Bridge", "High tower", "West battery"])
+      await preview.getByRole("button", { name: relay, exact: true }).click();
+    await expect(
+      preview.getByText("All relays restored!", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+
     await electron.close();
     desktopOpen = false;
     const browser = await chromium.launch({ args: ["--disable-gpu"] });

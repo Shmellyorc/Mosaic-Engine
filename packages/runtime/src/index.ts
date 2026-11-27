@@ -1058,6 +1058,12 @@ export class Game {
     external = false,
   ): BlueprintContext {
     const entity = state.entity;
+    const source = () => {
+      const scope = this.sceneWorld?.scopes.get(entity.id);
+      return scope && this.sceneWorld!.isLoaded(scope.sceneId)
+        ? scope
+        : undefined;
+    };
     return {
       axis: (id) => this.input.axis(id),
       variables,
@@ -1080,7 +1086,7 @@ export class Game {
       },
       query: (query) =>
         query === "scene"
-          ? (this.sceneWorld?.scopes.get(entity.id)?.name ?? this.scene.name)
+          ? (source()?.name ?? this.scene.name)
           : {
               kind: "entity",
               id: query === "self" ? entity.id : (entity.parentId ?? ""),
@@ -1093,17 +1099,16 @@ export class Game {
       emit: (id, value) => {
         if (external) this.scheduler.queueUi(id, value);
         else this.scheduler.emit(id, value);
-        const source =
-          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id;
-        this.triggerSceneSignal(id, source);
-        this.screens.signal(id, source);
+        const sceneId = source()?.sceneId ?? this.scene.id;
+        this.triggerSceneSignal(id, sceneId);
+        this.screens.signal(id, sceneId);
       },
       sceneFlow: (operation, target, route) => {
         if (!route) this.controlScene({ operation, sceneId: target });
         else {
           const command = this.sceneWorld?.route(
             target,
-            this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+            source()?.sceneId ?? this.scene.id,
           );
           if (!command)
             throw new Error("The project has no Scene Flow routes.");
@@ -1125,14 +1130,14 @@ export class Game {
           property,
           value,
           screenId,
-          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+          source()?.sceneId ?? this.scene.id,
         ),
       screen: (action, target, layerId) =>
         this.controlUi(
           action === "theme"
             ? { action, themeId: target || undefined }
             : { action, screenId: target, layerId },
-          this.sceneWorld?.scopes.get(entity.id)?.sceneId ?? this.scene.id,
+          source()?.sceneId ?? this.scene.id,
         ),
       data: {
         read: (source, id, key) => this.data.read(source, id, key),

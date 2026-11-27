@@ -1,3 +1,5 @@
+import { relayIslesProject, tideglassProject } from "./games/expansion";
+export { relayIslesProject, tideglassProject } from "./games/expansion";
 import { lanternCourierProject } from "./games/courier";
 import { beaconCircuitProject } from "./games/circuit";
 import {
@@ -359,4 +361,6 @@ export const playableExamples = [
     name: "Beacon Circuit",
     create: beaconCircuitProject,
   },
+  { id: "relay-isles", name: "Relay Isles", create: relayIslesProject },
+  { id: "tideglass", name: "Tideglass", create: tideglassProject },
 ] as const;

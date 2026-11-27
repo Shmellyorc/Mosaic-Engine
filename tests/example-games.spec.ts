@@ -114,7 +114,7 @@ for (const renderer of renderers) {
   });
 }
 
-test("both example documents survive editor save and reopen and produce standalone exports", async ({
+test("playable example documents survive editor save and reopen and produce standalone exports", async ({
   page,
 }, testInfo) => {
   await page.addInitScript(() => {
@@ -123,6 +123,7 @@ test("both example documents survive editor save and reopen and produce standalo
     localStorage.setItem("mosaic-renderer", "canvas");
   });
   await page.goto("http://127.0.0.1:5188/");
+  test.setTimeout(90000);
   const fromFile = async (label: string) => {
     await page
       .locator("details.menu > summary")
@@ -133,6 +134,8 @@ test("both example documents survive editor save and reopen and produce standalo
   for (const [id, title, rule] of [
     ["lantern-courier", "Lantern Courier", "Lantern Courier Rules"],
     ["beacon-circuit", "Beacon Circuit", "Beacon Circuit Rules"],
+    ["relay-isles", "Relay Isles", "Relay Isles Rules"],
+    ["tideglass", "Tideglass", "Tideglass Rules"],
   ]) {
     await fromFile("Open " + title);
     const downloaded = page.waitForEvent("download");

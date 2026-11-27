@@ -69,6 +69,10 @@ jobs:
             dist/lantern-courier.mosaic.json
             dist/beacon-circuit.html
             dist/beacon-circuit.mosaic.json
+            dist/relay-isles.html
+            dist/relay-isles.mosaic.json
+            dist/tideglass.html
+            dist/tideglass.mosaic.json
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

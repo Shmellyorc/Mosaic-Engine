@@ -58,6 +58,10 @@ export class SceneWorld {
     return source;
   }
 
+  isLoaded(sceneId: string) {
+    return this.loaded.has(sceneId);
+  }
+
   entityId(sceneId: string, entityId: string) {
     const mounted = this.loaded.get(sceneId);
     return (

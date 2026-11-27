@@ -1,3 +1,4 @@
+import { relayIslesProject } from "../packages/example/src/games/expansion";
 import { strict as assert } from "node:assert";
 import { mkdir, writeFile } from "node:fs/promises";
 import { availableParallelism, cpus } from "node:os";
@@ -100,6 +101,104 @@ function view(i: number) {
   return { x: 320 + ((i * 19) % 2100), y: 180 + ((i * 7) % 800), zoom: 1 };
 }
 
+function qualifySceneResidency() {
+  const project = relayIslesProject();
+  const region = project.scenes.find(({ id }) => id === "shoal")!;
+  const count = 384;
+  const cycles = 72;
+  const limits = { cycleP95Ms: 100, retainedHeapGrowthMiB: 12 };
+  project.behaviorTrees!.push({
+    id: "stress-agent",
+    name: "Stress Agent",
+    blackboard: [{ id: "ready", name: "Ready", initial: false }],
+    root: {
+      id: "root",
+      name: "Update",
+      kind: "sequence",
+      children: [
+        { id: "wait", name: "Wait", kind: "wait", seconds: STEP },
+        {
+          id: "set",
+          name: "Ready",
+          kind: "write",
+          key: "ready",
+          input: { kind: "value", value: true },
+        },
+      ],
+    },
+  });
+  for (let i = 0; i < count; i++) {
+    const entity = createEntity(region.layers[0].id);
+    entity.id = "stream-" + i;
+    entity.behaviorTree = "stress-agent";
+    entity.transform.x = 8 + (i % 24) * 19;
+    entity.transform.y = 10 + Math.floor(i / 24) * 19;
+    region.entities.push(entity);
+  }
+  const runtime = new Game(parseProject(serializeProject(project)));
+  runtime.advance(0);
+  runtime.advance(STEP);
+  const carry = runtime.getEntityHandle("harbor-beacon")!;
+  const hud = runtime.uiScreens.find(({ id }) => id === "global-hud")!.world;
+  let digest = 0;
+  function cycle() {
+    runtime.controlScene({
+      operation: "preload",
+      sceneId: region.id,
+      offset: { x: 70, y: 12 },
+    });
+    runtime.controlScene({
+      operation: "add",
+      sceneId: region.id,
+      offset: { x: 70, y: 12 },
+    });
+    runtime.advance(STEP);
+    runtime.advance(STEP);
+    runtime.advance(STEP);
+    const resolved = runtime.getSceneEntityId(region.id, "stream-0")!;
+    assert.equal(runtime.getBehaviorTree(resolved)?.blackboard.ready, true);
+    const handle = runtime.getEntityHandle(resolved)!;
+    digest = (Math.imul(digest, 31) + runtime.frame().draws.length) >>> 0;
+    runtime.controlScene({ operation: "unload", sceneId: region.id });
+    runtime.advance(STEP);
+    assert.equal(runtime.resolveEntity(handle), undefined);
+    assert.equal(runtime.resolveEntity(carry)?.id, "harbor-beacon");
+  }
+  runtime.controlScene({ operation: "unload", sceneId: region.id });
+  runtime.advance(STEP);
+  for (let n = 0; n < 12; n++) cycle();
+  const start = retainedHeap();
+  const timings: number[] = [];
+  for (let n = 0; n < cycles; n++) {
+    const before = performance.now();
+    cycle();
+    timings.push(performance.now() - before);
+  }
+  const growth = retainedHeap() - start;
+  timings.sort((a, b) => a - b);
+  const p95 = timings[Math.ceil(timings.length * 0.95) - 1];
+  assert(p95 <= limits.cycleP95Ms, "Scene streaming budget exceeded.");
+  assert(
+    growth <= limits.retainedHeapGrowthMiB,
+    "Scene unload retained too much heap.",
+  );
+  assert.equal(runtime.sceneStatus.loaded.length, 1);
+  assert.equal(runtime.sceneStatus.preloaded.length, 0);
+  assert.equal(
+    runtime.uiScreens.find(({ id }) => id === "global-hud")?.world,
+    hud,
+  );
+  assert.deepEqual(runtime.logs, []);
+  return {
+    cycles,
+    entitiesPerRegion: count,
+    digest,
+    p95Ms: rounded(p95),
+    retainedHeapGrowthMiB: rounded(growth),
+    limits,
+  };
+}
+
 const { project, tiles } = fixture();
 const source = serializeProject(project);
 const parsingAt = performance.now();
@@ -164,6 +263,7 @@ const report = {
     ticks: Math.round(game.time / STEP),
   },
   limits,
+  sceneResidency: qualifySceneResidency(),
 };
 await mkdir("dist", { recursive: true });
 await writeFile(
@@ -171,6 +271,8 @@ await writeFile(
   JSON.stringify(report, null, 2) + "\n",
 );
 console.log(JSON.stringify(report, null, 2));
+assert.equal(report.output.digest, 3413895419, "Legacy draw digest changed.");
+assert.equal(report.output.draws, 204503, "Legacy draw count changed.");
 assert.equal(report.output.ticks, shape.warmUp + shape.samples);
 assert.equal(
   game.logs.length,

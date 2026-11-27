@@ -29,12 +29,15 @@ Open **File → Open Lantern Ridge Sample** for a self-contained example. Move t
 
 ## Play the example games
 
-Use **File → Open Lantern Courier** or **File → Open Beacon Circuit**, then press **Play** and use the Game Preview. Each game is an editable Mosaic project with its rules in the same Blueprint editor.
+Open a playable example from the **File** menu, then press **Play** and use the Game Preview. Each game is an editable Mosaic project with its rules in the Blueprint editor.
 
 - **Lantern Courier** is a timed delivery through an alternating route. Move with WASD or the arrow keys, collect stamps 1, 2, and 3 in order, and reach the green gate before time runs out. The patrols can end a run early. The game saves the fastest successful delivery in the Personal Best slot.
 - **Beacon Circuit** is a three-board logic puzzle. Click a beacon or navigate with the arrow keys and press Enter. Each switch flips itself and its orthogonal neighbors. Light all nine beacons to advance. Reset board restores the current pattern and keeps the running move count. The game saves the fewest moves for a full clear.
 
-The build writes `dist/lantern-courier.html` and `dist/beacon-circuit.html` for offline play, plus matching `.mosaic.json` documents for authoring. The HTML player offers both renderers and an **Enable audio** control. CI publishes the four files together in the **playable-example-games** artifact.
+- **Relay Isles** is a three-stop relay puzzle. Read the tide chart, choose the correct relay at each port, and restore the network.
+- **Tideglass** challenges you to balance three station gauges. Open adds two units, Vent removes one, and Seal checks the gauge against its target.
+
+The build writes a standalone HTML file and an editable `.mosaic.json` document for each title. Each HTML player offers both renderers and an **Enable audio** control. CI publishes all four pairs in the **playable-example-games** artifact.
 
 ## Open and arrange project documents
 
@@ -174,10 +177,10 @@ npx playwright install chromium
 npm run smoke
 ```
 
-The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, `dist/ridge-trading-post.html`, and `dist/lantern-watch.html`. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Run `npm run release:archive` after packaging to create a `tar.gz`, SHA-256 checksum, and JSON manifest in `dist/`. The release archives are for development and testing. Public installers and macOS notarization require distribution credentials.
+The build writes the editor to `dist/desktop/` and the offline samples to `dist/lantern-ridge.html`, `dist/ridge-workshop.html`, `dist/lantern-signal-lab.html`, `dist/ridge-trading-post.html`, and `dist/lantern-watch.html`. The playable examples also ship offline HTML and editable project files for Lantern Courier, Beacon Circuit, Relay Isles, and Tideglass. Packaging creates an executable app bundle for the current platform in `dist/packages/`. Run `npm run release:archive` after packaging to create a `tar.gz`, SHA-256 checksum, and JSON manifest in `dist/`. The release archives are for development and testing. Public installers and macOS notarization require distribution credentials.
 
 Browser and packaged desktop smoke tests require a graphical session. On Linux, use `xvfb-run --auto-servernum npm run smoke`. CI runs the browser suite, including PixiJS and Canvas 2D parity, and launches the packaged editor on Linux x64, Windows x64, and macOS arm64. Each native job checks project creation, asset import, save and reopen, and offline HTML export. Download the native archives, checksums, manifests, and sample HTML files from a successful run. [Build and test workflow](https://github.com/Shmellyorc/Mosaic-Engine/actions/workflows/ci.yml)
 
-**Performance qualification** builds a repeatable large-world fixture with 16,000 scenery entities, 128 moving bodies, 64 particle emitters, and 32,768 tiles. It measures project parse time, the first draw list, 240 simulation and draw-list samples, and post-GC heap growth. It checks the spatial candidate and tile residency limits alongside frame-time and heap budgets for the fixture. The command writes `dist/qualification.json`, which CI uploads as **performance-qualification**.
+**Performance qualification** builds a repeatable large-world fixture with 16,000 scenery entities, 128 moving bodies, 64 particle emitters, and 32,768 tiles. It measures project parse time, the first draw list, 240 simulation and draw-list samples, and post-GC heap growth. It checks the legacy draw digest, spatial candidates, tile residency, frame time, and heap growth. A second fixture repeatedly preloads, adds, and unloads a region with 384 Behavior Tree instances. It checks that unloaded handles are invalidated and persistent state remains live. The command writes `dist/qualification.json`, which CI uploads as **performance-qualification**.
 
 MIT licensed.
